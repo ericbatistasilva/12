@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TechStore - Loja de Tecnologia</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="logo">
+            <h1>TechStore</h1>
+        </div>
+        <nav>
+            <ul>
+                <li><a href="#">Início</a></li>
+                <li><a href="#produtos">Produtos</a></li>
+                <li><a href="#">Ofertas</a></li>
+                <li><a href="#">Contato</a></li>
+            </ul>
+        </nav>
+        <div class="carrinho">
+            <button id="carrinho-btn" aria-label="Abrir carrinho">🛒 Carrinho (0)</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="banner">
+            <h2>Bem-vindo à TechStore</h2>
+            <p>Os melhores produtos tecnológicos para você!</p>
+        </section>
+
+        <section class="produtos" id="produtos">
+            <article class="produto">
+                <img src="https://via.placeholder.com/200" alt="iPhone 15">
+                <h3>iPhone 15</h3>
+                <p>R$ 7.999,00</p>
+                <button class="add-carrinho" data-nome="iPhone 15" data-preco="7999">Adicionar ao Carrinho</button>
+            </article>
+            <article class="produto">
+                <img src="https://via.placeholder.com/200" alt="MacBook Pro">
+                <h3>MacBook Pro</h3>
+                <p>R$ 12.999,00</p>
+                <button class="add-carrinho" data-nome="MacBook Pro" data-preco="12999">Adicionar ao Carrinho</button>
+            </article>
+            <article class="produto">
+                <img src="https://via.placeholder.com/200" alt="Headset Gamer">
+                <h3>Headset Gamer</h3>
+                <p>R$ 499,00</p>
+                <button class="add-carrinho" data-nome="Headset Gamer" data-preco="499">Adicionar ao Carrinho</button>
+            </article>
+            <article class="produto">
+                <img src="https://via.placeholder.com/200" alt="Teclado Mecânico">
+                <h3>Teclado Mecânico</h3>
+                <p>R$ 399,00</p>
+                <button class="add-carrinho" data-nome="Teclado Mecânico" data-preco="399">Adicionar ao Carrinho</button>
+            </article>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 TechStore. Todos os direitos reservados.</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
