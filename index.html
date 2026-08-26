@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TechStore - Loja de Tecnologia</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>TechStore</h1>
+            <nav>
+                <ul>
+                    <li><a href="#">Início</a></li>
+                    <li><a href="#produtos">Produtos</a></li>
+                    <li><a href="#contato">Contato</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <h2>As melhores inovações tecnológicas para você</h2>
+            <p>Encontre smartphones, notebooks e acessórios com os melhores preços.</p>
+        </section>
+
+        <section id="produtos" class="products-section">
+            <h2>Destaques</h2>
+            <div class="product-grid">
+                <div class="product-card">
+                    <h3>Smartphone Pro</h3>
+                    <p>Tela AMOLED 120Hz, 256GB</p>
+                    <span class="price">R$ 2.499,00</span>
+                    <button onclick="adicionarAoCarrinho('Smartphone Pro')">Comprar</button>
+                </div>
+                <div class="product-card">
+                    <h3>Notebook Gamer</h3>
+                    <p>Intel Core i7, RTX 4060, 16GB RAM</p>
+                    <span class="price">R$ 6.299,00</span>
+                    <button onclick="adicionarAoCarrinho('Notebook Gamer')">Comprar</button>
+                </div>
+                <div class="product-card">
+                    <h3>Fone Bluetooth ANC</h3>
+                    <p>Cancelamento de ruído ativo</p>
+                    <span class="price">R$ 399,00</span>
+                    <button onclick="adicionarAoCarrinho('Fone Bluetooth ANC')">Comprar</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 TechStore. Todos os direitos reservados.</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
