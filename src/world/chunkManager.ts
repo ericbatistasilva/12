@@ -3,10 +3,10 @@ import {
   BlockId,
   CHUNK_SIZE_X,
   CHUNK_SIZE_Z,
-  SerialChunk,
   WORLD_HEIGHT,
   isBlockSolid
 } from '../core/types.js';
+import type { SerializedChunk } from '../core/gameState.js';
 import { buildChunkGeometries } from './chunkMeshBuilder.js';
 import { WorldGenerator } from './worldGenerator.js';
 
@@ -62,7 +62,7 @@ export class ChunkManager {
     return this.chunks.get(chunkKey(cx, cz));
   }
 
-  loadSavedChunks(savedChunks: SerialChunk[]): void {
+  loadSavedChunks(savedChunks: SerializedChunk[]): void {
     for (const sc of savedChunks) {
       const key = chunkKey(sc.cx, sc.cz);
       const blocks = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
@@ -254,8 +254,8 @@ export class ChunkManager {
     }
   }
 
-  getModifiedChunksSerialized(): SerialChunk[] {
-    const result: SerialChunk[] = [];
+  getModifiedChunksSerialized(): SerializedChunk[] {
+    const result: SerializedChunk[] = [];
     for (const record of this.chunks.values()) {
       if (record.modified) {
         result.push({

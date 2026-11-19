@@ -5,9 +5,10 @@ import { WorldGenerator } from '../src/world/worldGenerator.js';
 import { ChunkManager } from '../src/world/chunkManager.js';
 import { stepPlayerPhysics, createPlayerAABB, collidesWithWorld } from '../src/physics/collision.js';
 import { InventoryManager } from '../src/inventory/inventoryManager.js';
-import { mineTargetedBlock, placeBlockAtTarget, TargetBlockHit } from '../src/building/blockInteraction.js';
+import { mineTargetedBlock, placeBlockAtTarget } from '../src/building/blockInteraction.js';
+import type { TargetBlockHit } from '../src/building/blockInteraction.js';
 import { WORLD_SAVE_VERSION, WorldStorage, validateSavedWorldIntegrity } from '../src/persistence/worldStorage.js';
-import { SavedWorldData } from '../src/core/gameState.js';
+import type { SavedWorldData } from '../src/core/gameState.js';
 
 describe('BlockWorld — Testes Essenciais', () => {
   it('1. Geração de terreno é determinística por semente e produz múltiplos tipos de blocos', () => {
@@ -42,7 +43,7 @@ describe('BlockWorld — Testes Essenciais', () => {
     const startBox = createPlayerAABB(startPos);
     assert.equal(collidesWithWorld(startBox, solidWallWorld), false);
 
-    // Move para frente (+X, yaw = -Math.PI/2 aponta para +X) em direção à parede em x=2
+    // Move para +X em direção à parede em x=2
     let pos = { ...startPos };
     let vel = { x: 0, y: 0, z: 0 };
     const moveRightInput = {
