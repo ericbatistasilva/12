@@ -1,0 +1,21 @@
+{
+  "name": "blockworld-3d",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BlockWorld — Jogo 3D de blocos em mundo aberto no navegador com Three.js e TypeScript",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

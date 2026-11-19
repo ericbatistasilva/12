@@ -1,13 +1,4 @@
-*.tar
-*.tar.*
-*.jar
-*.exe
-*.msi
-*.zip
-*.tgz
+node_modules/
+dist/
 *.log
-*.log.*
-*.sig
-
-pkg/
-src/
+.DS_Store

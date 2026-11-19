@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BlockWorld — Jogo 3D de Blocos</title>
+    <link rel="stylesheet" href="./src/styles/main.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game-canvas" aria-label="Cena 3D do BlockWorld"></canvas>
+
+      <!-- Mira central (HUD) -->
+      <div id="crosshair" class="hud-element hidden" aria-hidden="true">
+        <span class="crosshair-dot"></span>
+        <span class="crosshair-h"></span>
+        <span class="crosshair-v"></span>
+      </div>
+
+      <!-- Info superior do mundo e bloco observado -->
+      <div id="hud-top" class="hud-element hidden">
+        <div class="hud-badge">
+          <span id="hud-world-name">Mundo</span>
+          <span id="hud-coords">X: 0 | Y: 0 | Z: 0</span>
+          <span id="hud-biome">Planície</span>
+        </div>
+        <div id="hud-target-block" class="hud-badge subtle">Nenhum bloco alvo</div>
+        <div id="hud-status-msg" class="hud-toast hidden"></div>
+      </div>
+
+      <!-- Barra rápida inferior (Hotbar) -->
+      <div id="hotbar-container" class="hud-element hidden">
+        <div id="hotbar-slots" class="hotbar-slots" role="toolbar" aria-label="Barra de seleção de blocos"></div>
+        <div class="hud-hints">
+          <span>WASD: Mover</span>
+          <span>Espaço: Pular</span>
+          <span>Shift: Correr</span>
+          <span>Clique Esq: Quebrar</span>
+          <span>Clique Dir: Colocar</span>
+          <span>E: Inventário</span>
+          <span>ESC: Pausar</span>
+        </div>
+      </div>
+
+      <!-- Menu Inicial -->
+      <section id="menu-screen" class="overlay-screen active">
+        <div class="panel menu-panel">
+          <div class="brand-header">
+            <span class="brand-tag">WEBGL • CHUNK ENGINE • OFFLINE READY</span>
+            <h1>BLOCKWORLD</h1>
+            <p class="subtitle">Explore biomas, minere recursos, construa estruturas e salve seu mundo localmente.</p>
+          </div>
+
+          <div class="world-creator">
+            <div class="field-group">
+              <label for="world-name-input">Nome do Mundo</label>
+              <input id="world-name-input" type="text" maxlength="32" value="Novo Mundo" placeholder="Ex: Vale das Montanhas" />
+            </div>
+            <div class="field-group">
+              <label for="world-seed-input">Semente Procedural</label>
+              <div class="seed-row">
+                <input id="world-seed-input" type="text" maxlength="24" placeholder="Aleatória se vazio" />
+                <button id="random-seed-btn" type="button" class="btn btn-secondary" title="Gerar semente aleatória">🎲</button>
+              </div>
+            </div>
+            <button id="start-new-world-btn" type="button" class="btn btn-primary">Criar e Iniciar Novo Mundo</button>
+          </div>
+
+          <div class="saved-worlds-section">
+            <div class="section-header">
+              <h2>Mundos Salvos</h2>
+              <button id="open-menu-settings-btn" type="button" class="btn btn-ghost">⚙️ Opções</button>
+            </div>
+            <div id="saved-worlds-list" class="saved-worlds-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Modal de Inventário Completo -->
+      <section id="inventory-screen" class="overlay-screen hidden">
+        <div class="panel inventory-panel">
+          <div class="panel-header">
+            <h2>Inventário de Recursos</h2>
+            <button id="close-inventory-btn" type="button" class="btn btn-secondary">Fechar (E)</button>
+          </div>
+          <p class="help-text">Clique em um item para atribuí-lo ao slot selecionado na barra inferior. Quebre blocos para coletar recursos.</p>
+          <div id="inventory-grid" class="inventory-grid"></div>
+        </div>
+      </section>
+
+      <!-- Menu de Pausa -->
+      <section id="pause-screen" class="overlay-screen hidden">
+        <div class="panel pause-panel">
+          <h2>Jogo Pausado</h2>
+          <p class="help-text">Seu progresso local fica salvo no navegador sem necessidade de internet.</p>
+          <div class="pause-actions">
+            <button id="resume-game-btn" type="button" class="btn btn-primary">Continuar Jogando</button>
+            <button id="save-world-btn" type="button" class="btn btn-secondary">Salvar Mundo Agora</button>
+            <button id="open-pause-settings-btn" type="button" class="btn btn-secondary">Opções Gráficas e Áudio</button>
+            <button id="exit-to-menu-btn" type="button" class="btn btn-danger">Salvar e Voltar ao Menu</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Modal de Opções Gráficas e Áudio -->
+      <section id="settings-screen" class="overlay-screen hidden">
+        <div class="panel settings-panel">
+          <div class="panel-header">
+            <h2>Opções Gráficas e Áudio</h2>
+            <button id="close-settings-btn" type="button" class="btn btn-secondary">Voltar</button>
+          </div>
+
+          <div class="settings-grid">
+            <div class="field-group">
+              <label for="render-distance-select">Distância de Renderização (Chunks)</label>
+              <select id="render-distance-select">
+                <option value="2">2 chunks (Leve / Baixo hardware)</option>
+                <option value="3">3 chunks (Equilibrado)</option>
+                <option value="4">4 chunks (Amplo)</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <label for="fov-range">Campo de Visão (FOV): <span id="fov-value">75°</span></label>
+              <input id="fov-range" type="range" min="60" max="95" step="1" value="75" />
+            </div>
+
+            <div class="field-group">
+              <label for="sensitivity-range">Sensibilidade do Mouse: <span id="sensitivity-value">1.0x</span></label>
+              <input id="sensitivity-range" type="range" min="0.3" max="2.5" step="0.1" value="1.0" />
+            </div>
+
+            <div class="field-group checkbox-group">
+              <label>
+                <input id="shadows-toggle" type="checkbox" checked />
+                Sombras Dinâmicas (WebGL)
+              </label>
+            </div>
+
+            <div class="field-group checkbox-group">
+              <label>
+                <input id="fog-toggle" type="checkbox" checked />
+                Névoa Atmosférica
+              </label>
+            </div>
+
+            <div class="field-group">
+              <label for="sfx-volume-range">Volume de Efeitos Sonoros: <span id="sfx-volume-value">60%</span></label>
+              <input id="sfx-volume-range" type="range" min="0" max="100" step="5" value="60" />
+            </div>
+
+            <div class="field-group checkbox-group">
+              <label>
+                <input id="sfx-mute-toggle" type="checkbox" />
+                Silenciar Áudio
+              </label>
+            </div>
+          </div>
+
+          <div class="panel-footer">
+            <button id="save-settings-btn" type="button" class="btn btn-primary">Aplicar e Salvar Opções</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
