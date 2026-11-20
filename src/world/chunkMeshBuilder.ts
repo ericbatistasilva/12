@@ -1,14 +1,17 @@
 import * as THREE from 'three';
 import {
   BlockId,
-  CHUNK_HEIGHT,
-  CHUNK_SIZE,
+  CHUNK_SIZE_X,
+  CHUNK_SIZE_Z,
+  WORLD_HEIGHT,
   getBlockDefinition,
   isBlockSolid
 } from '../core/types.js';
 import { BlockFaceKind, getBlockFaceUvRect, UvRect } from './blockTextureAtlas.js';
 
-export type BlockLookup = (wx: number, wy: number, wz: number) => number;
+export interface BlockLookup {
+  getBlockAt(wx: number, wy: number, wz: number): number;
+}
 
 export interface ChunkRecord {
   cx: number;
@@ -158,8 +161,8 @@ function createMeshBuffers(): MeshBuffers {
   };
 }
 
-function isOccluding(getBlock: BlockLookup, wx: number, wy: number, wz: number): boolean {
-  const id = getBlock(wx, wy, wz);
+function isOccluding(getBlockWorld: BlockLookup, wx: number, wy: number, wz: number): boolean {
+  const id = getBlockWorld.getBlockAt(wx, wy, wz);
   if (id === BlockId.AIR || id === BlockId.WATER || id === BlockId.GLASS || id === BlockId.LEAVES) {
     return false;
   }
@@ -167,7 +170,7 @@ function isOccluding(getBlock: BlockLookup, wx: number, wy: number, wz: number):
 }
 
 function computeCornerAo(
-  getBlock: BlockLookup,
+  getBlockWorld: BlockLookup,
   nx: number,
   ny: number,
   nz: number,
@@ -182,17 +185,17 @@ function computeCornerAo(
   let corner = false;
 
   if (ny !== 0) {
-    side1 = isOccluding(getBlock, wx + sx, wy + ny, wz);
-    side2 = isOccluding(getBlock, wx, wy + ny, wz + sz);
-    corner = isOccluding(getBlock, wx + sx, wy + ny, wz + sz);
+    side1 = isOccluding(getBlockWorld, wx + sx, wy + ny, wz);
+    side2 = isOccluding(getBlockWorld, wx, wy + ny, wz + sz);
+    corner = isOccluding(getBlockWorld, wx + sx, wy + ny, wz + sz);
   } else if (nx !== 0) {
-    side1 = isOccluding(getBlock, wx + nx, wy + sy, wz);
-    side2 = isOccluding(getBlock, wx + nx, wy, wz + sz);
-    corner = isOccluding(getBlock, wx + nx, wy + sy, wz + sz);
+    side1 = isOccluding(getBlockWorld, wx + nx, wy + sy, wz);
+    side2 = isOccluding(getBlockWorld, wx + nx, wy, wz + sz);
+    corner = isOccluding(getBlockWorld, wx + nx, wy + sy, wz + sz);
   } else {
-    side1 = isOccluding(getBlock, wx + sx, wy, wz + nz);
-    side2 = isOccluding(getBlock, wx, wy + sy, wz + nz);
-    corner = isOccluding(getBlock, wx + sx, wy + sy, wz + nz);
+    side1 = isOccluding(getBlockWorld, wx + sx, wy, wz + nz);
+    side2 = isOccluding(getBlockWorld, wx, wy + sy, wz + nz);
+    corner = isOccluding(getBlockWorld, wx + sx, wy + sy, wz + nz);
   }
 
   const occ = side1 && side2 ? 3 : (side1 ? 1 : 0) + (side2 ? 1 : 0) + (corner ? 1 : 0);
@@ -269,15 +272,15 @@ export function buildChunkGeometries(
 ): ChunkGeometries {
   const opaqueBuf = createMeshBuffers();
   const transparentBuf = createMeshBuffers();
-  const originX = cx * CHUNK_SIZE;
-  const originZ = cz * CHUNK_SIZE;
+  const originX = cx * CHUNK_SIZE_X;
+  const originZ = cz * CHUNK_SIZE_Z;
   const tempColor = new THREE.Color();
 
-  for (let y = 0; y < CHUNK_HEIGHT; y++) {
-    for (let z = 0; z < CHUNK_SIZE; z++) {
+  for (let y = 0; y < WORLD_HEIGHT; y++) {
+    for (let z = 0; z < CHUNK_SIZE_Z; z++) {
       const wz = originZ + z;
-      for (let x = 0; x < CHUNK_SIZE; x++) {
-        const idx = x + CHUNK_SIZE * (z + CHUNK_SIZE * y);
+      for (let x = 0; x < CHUNK_SIZE_X; x++) {
+        const idx = y * CHUNK_SIZE_X * CHUNK_SIZE_Z + z * CHUNK_SIZE_X + x;
         const blockId = blocks[idx];
         if (blockId === BlockId.AIR) {
           continue;
@@ -290,7 +293,7 @@ export function buildChunkGeometries(
 
         for (const face of FACES) {
           const [nx, ny, nz] = face.dir;
-          const neighborId = getBlockWorld(wx + nx, y + ny, wz + nz);
+          const neighborId = getBlockWorld.getBlockAt(wx + nx, y + ny, wz + nz);
 
           if (isTransp) {
             if (neighborId === blockId) {
