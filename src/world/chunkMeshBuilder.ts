@@ -5,6 +5,7 @@ import {
   CHUNK_SIZE_Z,
   WORLD_HEIGHT,
   getBlockDefinition,
+  isBlockSolid,
   isBlockTransparent
 } from '../core/types.js';
 
@@ -18,6 +19,7 @@ interface FaceSpec {
   ];
   faceKey: 'top' | 'side' | 'bottom';
   shade: number;
+  tangentAxes: [number, number];
 }
 
 const FACES: FaceSpec[] = [
@@ -31,7 +33,8 @@ const FACES: FaceSpec[] = [
       [1, 1, 1]
     ],
     faceKey: 'side',
-    shade: 0.86
+    shade: 0.86,
+    tangentAxes: [1, 2]
   },
   // -X (Esquerda)
   {
@@ -43,7 +46,8 @@ const FACES: FaceSpec[] = [
       [0, 1, 0]
     ],
     faceKey: 'side',
-    shade: 0.82
+    shade: 0.82,
+    tangentAxes: [1, 2]
   },
   // +Y (Topo)
   {
@@ -55,7 +59,8 @@ const FACES: FaceSpec[] = [
       [0, 1, 0]
     ],
     faceKey: 'top',
-    shade: 1.0
+    shade: 1.0,
+    tangentAxes: [0, 2]
   },
   // -Y (Baixo)
   {
@@ -67,7 +72,8 @@ const FACES: FaceSpec[] = [
       [0, 0, 1]
     ],
     faceKey: 'bottom',
-    shade: 0.65
+    shade: 0.65,
+    tangentAxes: [0, 2]
   },
   // +Z (Frente)
   {
@@ -79,7 +85,8 @@ const FACES: FaceSpec[] = [
       [0, 1, 1]
     ],
     faceKey: 'side',
-    shade: 0.92
+    shade: 0.92,
+    tangentAxes: [0, 1]
   },
   // -Z (Trás)
   {
@@ -91,7 +98,8 @@ const FACES: FaceSpec[] = [
       [1, 1, 0]
     ],
     faceKey: 'side',
-    shade: 0.78
+    shade: 0.78,
+    tangentAxes: [0, 1]
   }
 ];
 
@@ -139,6 +147,48 @@ function getShadedColor(hex: string, shade: number): THREE.Color {
   return cached;
 }
 
+function calculateVertexAo(
+  wx: number,
+  y: number,
+  wz: number,
+  face: FaceSpec,
+  corner: [number, number, number],
+  worldLookup: BlockLookup
+): number {
+  const [uAxis, vAxis] = face.tangentAxes;
+  const uSign = corner[uAxis] === 0 ? -1 : 1;
+  const vSign = corner[vAxis] === 0 ? -1 : 1;
+  const faceX = wx + face.dir[0];
+  const faceY = y + face.dir[1];
+  const faceZ = wz + face.dir[2];
+
+  const side1 = worldLookup.getBlockAt(
+    faceX + (uAxis === 0 ? uSign : 0),
+    faceY + (uAxis === 1 ? uSign : 0),
+    faceZ + (uAxis === 2 ? uSign : 0)
+  );
+  const side2 = worldLookup.getBlockAt(
+    faceX + (vAxis === 0 ? vSign : 0),
+    faceY + (vAxis === 1 ? vSign : 0),
+    faceZ + (vAxis === 2 ? vSign : 0)
+  );
+  const cornerBlock = worldLookup.getBlockAt(
+    faceX + (uAxis === 0 ? uSign : 0) + (vAxis === 0 ? vSign : 0),
+    faceY + (uAxis === 1 ? uSign : 0) + (vAxis === 1 ? vSign : 0),
+    faceZ + (uAxis === 2 ? uSign : 0) + (vAxis === 2 ? vSign : 0)
+  );
+
+  const side1Occludes = isBlockSolid(side1);
+  const side2Occludes = isBlockSolid(side2);
+  const cornerOccludes = isBlockSolid(cornerBlock);
+
+  // Duas laterais sólidas fecham a quina e produzem a sombra mais forte.
+  if (side1Occludes && side2Occludes) return 0.58;
+  const occluderCount =
+    Number(side1Occludes) + Number(side2Occludes) + Number(cornerOccludes);
+  return 1 - occluderCount * 0.13;
+}
+
 export function buildChunkGeometries(
   cx: number,
   cz: number,
@@ -150,6 +200,7 @@ export function buildChunkGeometries(
 
   const baseX = cx * CHUNK_SIZE_X;
   const baseZ = cz * CHUNK_SIZE_Z;
+  const vertexColor = new THREE.Color();
 
   const localIndex = (lx: number, y: number, lz: number): number =>
     y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx;
@@ -203,7 +254,10 @@ export function buildChunkGeometries(
                 : y + corner[1];
             target.positions.push(wx + corner[0], py, wz + corner[2]);
             target.normals.push(face.dir[0], face.dir[1], face.dir[2]);
-            target.colors.push(col.r, col.g, col.b);
+
+            const ao = calculateVertexAo(wx, y, wz, face, corner, worldLookup);
+            vertexColor.copy(col).multiplyScalar(ao);
+            target.colors.push(vertexColor.r, vertexColor.g, vertexColor.b);
           }
 
           target.indices.push(
