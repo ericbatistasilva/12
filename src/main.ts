@@ -34,7 +34,6 @@ class BlockWorldApp {
 
   private lastFrameTime = 0;
   private stepAccumulator = 0;
-  private rafId: number | null = null;
 
   constructor() {
     this.settings = this.storage.loadSettings();
@@ -474,10 +473,10 @@ class BlockWorldApp {
       }
 
       this.engine.render();
-      this.rafId = window.requestAnimationFrame(tick);
+      window.requestAnimationFrame(tick);
     };
 
-    this.rafId = window.requestAnimationFrame(tick);
+    window.requestAnimationFrame(tick);
   }
 }
 
