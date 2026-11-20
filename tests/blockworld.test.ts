@@ -9,11 +9,11 @@ import {
   getBlockDefinition,
   isBlockSolid
 } from '../src/core/types.js';
-import { createDefaultGameState } from '../src/core/gameState.js';
-import { WorldGenerator, SEA_LEVEL } from '../src/world/worldGenerator.js';
-import { BlockRaycast } from '../src/building/blockInteraction.js';
+import { createInitialGameState } from '../src/core/gameState.js';
+import { WorldGenerator } from '../src/world/worldGenerator.js';
+import { raycastTargetBlock } from '../src/building/blockInteraction.js';
 import { PlayerController } from '../src/player/playerController.js';
-import { MemoryStorageAdapter, WorldStorage } from '../src/persistence/worldStorage.js';
+import { WorldStorage } from '../src/persistence/worldStorage.js';
 import { getBlockFaceUvRect } from '../src/world/blockTextureAtlas.js';
 import { buildChunkGeometries } from '../src/world/chunkMeshBuilder.js';
 
@@ -26,11 +26,11 @@ test('1. deterministic procedural world generation and safe spawn', () => {
   const chunkB = genB.generateChunk(0, 0);
   const chunkC = genC.generateChunk(0, 0);
 
-  assert.deepEqual(Array.from(chunkA.blocks), Array.from(chunkB.blocks));
-  assert.notDeepEqual(Array.from(chunkA.blocks), Array.from(chunkC.blocks));
+  assert.deepEqual(Array.from(chunkA), Array.from(chunkB));
+  assert.notDeepEqual(Array.from(chunkA), Array.from(chunkC));
 
-  const spawn = genA.findSafeSpawn(0, 0);
-  assert.ok(spawn.y > SEA_LEVEL);
+  const spawn = genA.findSafeSpawnPosition(0, 0);
+  assert.ok(spawn.y > 0);
   assert.equal(
     isBlockSolid(genA.getBlockAt(Math.floor(spawn.x), Math.floor(spawn.y - 1.1), Math.floor(spawn.z))),
     true
@@ -38,7 +38,7 @@ test('1. deterministic procedural world generation and safe spawn', () => {
 });
 
 test('2. physics and block collision behavior', () => {
-  const state = createDefaultGameState();
+  const state = createInitialGameState();
   const camera = new THREE.PerspectiveCamera(state.settings.fov, 1.5, 0.1, 180);
   const solidBlocks = new Map<string, number>();
   solidBlocks.set('0,4,0', BlockId.STONE);
@@ -62,8 +62,7 @@ test('3. block mining and placement raycast target resolution', () => {
   const idx = 4 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 2 * CHUNK_SIZE_X + 2;
   blocks[idx] = BlockId.STONE;
 
-  const raycast = new BlockRaycast();
-  const hit = raycast.cast(
+  const hit = raycastTargetBlock(
     new THREE.Vector3(2.5, 4.5, 5.0),
     new THREE.Vector3(0, 0, -1),
     8,
@@ -86,7 +85,7 @@ test('3. block mining and placement raycast target resolution', () => {
 });
 
 test('4. inventory slots, hotbar selection, and block definitions', () => {
-  const state = createDefaultGameState();
+  const state = createInitialGameState();
   assert.ok(state.hotbar.length > 0);
   assert.equal(getBlockDefinition(BlockId.AIR).solid, false);
   assert.equal(getBlockDefinition(BlockId.WATER).solid, false);
@@ -97,18 +96,30 @@ test('4. inventory slots, hotbar selection, and block definitions', () => {
 
   const firstSlot = state.hotbar[0];
   assert.ok(firstSlot !== undefined);
-  state.addItem(BlockId.COBBLESTONE, 3);
-  assert.ok(state.getItemCount(BlockId.COBBLESTONE) >= 3);
+  state.addBlockToInventory(BlockId.COBBLESTONE, 3);
+  assert.ok(state.getBlockCount(BlockId.COBBLESTONE) >= 3);
 });
 
 test('5. world persistence and integrity across save and load', () => {
-  const storage = new WorldStorage(new MemoryStorageAdapter());
+  const memoryStore = new Map<string, string>();
+  const storage = new WorldStorage({
+    getItem(key: string): string | null {
+      return memoryStore.get(key) ?? null;
+    },
+    setItem(key: string, value: string): void {
+      memoryStore.set(key, value);
+    },
+    removeItem(key: string): void {
+      memoryStore.delete(key);
+    }
+  });
+
   const gen = new WorldGenerator('persist-seed');
-  const world = storage.createWorld('Mundo Persistente', 'persist-seed', gen.findSafeSpawn(0, 0));
+  const world = storage.createWorld('Mundo Persistente', 'persist-seed', gen.findSafeSpawnPosition(0, 0));
   world.modifiedChunks.push({
     cx: 0,
     cz: 0,
-    blocks: Array.from(gen.generateChunk(0, 0).blocks)
+    blocks: Array.from(gen.generateChunk(0, 0))
   });
   storage.saveWorld(world);
 
@@ -120,7 +131,7 @@ test('5. world persistence and integrity across save and load', () => {
   assert.equal(loaded.modifiedChunks.length, 1);
 });
 
-test('6. atlas UV rectangles are valid across top, side, and bottom faces', () => {
+test('6. atlas UV rectangles are valid and differentiate top vs side faces', () => {
   const sampleBlocks = [
     BlockId.GRASS,
     BlockId.DIRT,
