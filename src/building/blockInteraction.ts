@@ -4,7 +4,8 @@ import {
   WORLD_HEIGHT,
   getBlockDefinition
 } from '../core/types.js';
-import { PlayerPosition, createPlayerAABB, intersectsAABB } from '../physics/collision.js';
+import type { PlayerPosition } from '../core/gameState.js';
+import { createPlayerAABB, intersectsAABB } from '../physics/collision.js';
 
 export interface TargetBlockHit {
   blockPos: { x: number; y: number; z: number };
