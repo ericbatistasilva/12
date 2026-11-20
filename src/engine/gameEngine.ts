@@ -1,65 +1,48 @@
 import * as THREE from 'three';
 import { GameSettings } from '../core/gameState.js';
 import { TargetBlockHit } from '../building/blockInteraction.js';
-
-const SKY_COLOR = 0x87c6f5;
+import { BlockAtlasResources, createBlockTextureAtlas } from '../world/blockTextureAtlas.js';
 
 export class GameEngine {
   public readonly canvas: HTMLCanvasElement;
   public readonly renderer: THREE.WebGLRenderer;
   public readonly scene: THREE.Scene;
   public readonly camera: THREE.PerspectiveCamera;
-  public readonly opaqueMaterial: THREE.MeshStandardMaterial;
-  public readonly transparentMaterial: THREE.MeshStandardMaterial;
+  public readonly atlas: BlockAtlasResources;
+  public readonly blockMaterial: THREE.MeshLambertMaterial;
   private readonly dirLight: THREE.DirectionalLight;
   private readonly fog: THREE.FogExp2;
   private readonly selectionBox: THREE.LineSegments;
 
-  constructor(canvas: HTMLCanvasElement, initialSettings: GameSettings) {
+  constructor(canvas: HTMLCanvasElement, initialSettings: GameSettings, atlasSeed = 1337) {
     this.canvas = canvas;
-
-    this.renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-      powerPreference: 'default'
-    });
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth || 800, window.innerHeight || 600, false);
     this.renderer.shadowMap.enabled = initialSettings.shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(SKY_COLOR);
+    this.scene.background = new THREE.Color(0x9ec5e8);
 
-    this.fog = new THREE.FogExp2(SKY_COLOR, initialSettings.fog ? 0.011 : 0);
+    this.fog = new THREE.FogExp2(0x9ec5e8, initialSettings.fog ? 0.012 : 0);
     this.scene.fog = this.fog;
 
-    this.camera = new THREE.PerspectiveCamera(
-      initialSettings.fov,
-      (window.innerWidth || 800) / (window.innerHeight || 600),
-      0.1,
-      220
-    );
+    const width = window.innerWidth || 800;
+    const height = window.innerHeight || 600;
+    this.camera = new THREE.PerspectiveCamera(initialSettings.fov, width / height, 0.1, 180);
 
-    const hemiLight = new THREE.HemisphereLight(0xdff2ff, 0x4b5d3b, 1.05);
+    const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x4b5563, 0.85);
     this.scene.add(hemiLight);
 
-    const ambientLight = new THREE.AmbientLight(0xe9f1ff, 0.22);
-    this.scene.add(ambientLight);
-
-    this.dirLight = new THREE.DirectionalLight(0xfff2dc, 2.0);
-    this.dirLight.position.set(45, 75, 35);
+    this.dirLight = new THREE.DirectionalLight(0xfffbeb, 1.15);
+    this.dirLight.position.set(28, 46, 22);
     this.dirLight.castShadow = initialSettings.shadows;
     this.dirLight.shadow.mapSize.width = 1024;
     this.dirLight.shadow.mapSize.height = 1024;
-    this.dirLight.shadow.bias = -0.00025;
-    this.dirLight.shadow.normalBias = 0.025;
-    this.dirLight.shadow.camera.near = 5;
-    this.dirLight.shadow.camera.far = 200;
-    const d = 42;
+    this.dirLight.shadow.camera.near = 4;
+    this.dirLight.shadow.camera.far = 140;
+    const d = 36;
     this.dirLight.shadow.camera.left = -d;
     this.dirLight.shadow.camera.right = d;
     this.dirLight.shadow.camera.top = d;
@@ -67,22 +50,16 @@ export class GameEngine {
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
-    this.opaqueMaterial = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.88,
-      metalness: 0.0
-    });
+    this.atlas = createBlockTextureAtlas(atlasSeed);
 
-    this.transparentMaterial = new THREE.MeshStandardMaterial({
+    this.blockMaterial = new THREE.MeshLambertMaterial({
+      map: this.atlas.map,
       vertexColors: true,
       transparent: true,
-      opacity: 0.78,
-      roughness: 0.72,
-      metalness: 0.0,
-      depthWrite: false
+      alphaTest: 0.4,
+      side: THREE.DoubleSide
     });
 
-    // Contorno wireframe do bloco selecionado pelo raycast
     const boxGeom = new THREE.BoxGeometry(1.006, 1.006, 1.006);
     const edgesGeom = new THREE.EdgesGeometry(boxGeom);
     boxGeom.dispose();
@@ -90,16 +67,16 @@ export class GameEngine {
     this.selectionBox = new THREE.LineSegments(edgesGeom, edgesMat);
     this.selectionBox.visible = false;
     this.scene.add(this.selectionBox);
+
+    this.applySettings(initialSettings);
   }
 
   applySettings(settings: GameSettings): void {
     this.camera.fov = settings.fov;
     this.camera.updateProjectionMatrix();
-
-    this.fog.density = settings.fog ? 0.011 : 0;
+    this.fog.density = settings.fog ? 0.012 : 0;
     this.renderer.shadowMap.enabled = settings.shadows;
     this.dirLight.castShadow = settings.shadows;
-    this.renderer.shadowMap.needsUpdate = true;
   }
 
   updateTargetHighlight(target: TargetBlockHit | null): void {
@@ -115,9 +92,9 @@ export class GameEngine {
     );
   }
 
-  syncSunWithPlayer(playerX: number, playerZ: number): void {
-    this.dirLight.position.set(playerX + 36, 72, playerZ + 28);
-    this.dirLight.target.position.set(playerX, 12, playerZ);
+  syncSunPosition(playerX: number, playerZ: number): void {
+    this.dirLight.position.set(playerX + 28, 46, playerZ + 22);
+    this.dirLight.target.position.set(playerX, 10, playerZ);
     this.dirLight.target.updateMatrixWorld();
   }
 
@@ -134,8 +111,8 @@ export class GameEngine {
   }
 
   dispose(): void {
-    this.opaqueMaterial.dispose();
-    this.transparentMaterial.dispose();
+    this.blockMaterial.dispose();
+    this.atlas.dispose();
     this.selectionBox.geometry.dispose();
     (this.selectionBox.material as THREE.Material).dispose();
     this.renderer.dispose();
