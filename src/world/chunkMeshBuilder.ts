@@ -1,12 +1,38 @@
 import * as THREE from 'three';
-import { BlockId, getBlockDefinition, isBlockOpaque, isPlantBlock } from '../core/types.js';
-import { Chunk, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z } from './chunk.js';
+import {
+  BlockId,
+  CHUNK_HEIGHT,
+  CHUNK_SIZE,
+  getBlockDefinition,
+  isBlockSolid
+} from '../core/types.js';
 import { BlockFaceKind, getBlockFaceUvRect, UvRect } from './blockTextureAtlas.js';
+
+export type BlockLookup = (wx: number, wy: number, wz: number) => number;
+
+export interface ChunkRecord {
+  cx: number;
+  cz: number;
+  blocks: Uint8Array;
+  opaqueMesh: THREE.Mesh | null;
+  transparentMesh: THREE.Mesh | null;
+  dirty: boolean;
+}
+
+export interface ChunkGeometries {
+  opaqueGeometry: THREE.BufferGeometry | null;
+  transparentGeometry: THREE.BufferGeometry | null;
+}
 
 interface FaceSpec {
   dir: [number, number, number];
   faceKind: BlockFaceKind;
-  // Ordem anti-horária (CCW) vista de fora da face para normais e winding corretos
+  aoWeights: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+    [number, number, number]
+  ];
   corners: [
     [number, number, number],
     [number, number, number],
@@ -15,10 +41,16 @@ interface FaceSpec {
   ];
 }
 
-const CUBE_FACES: FaceSpec[] = [
+const FACES: FaceSpec[] = [
   {
     dir: [0, 1, 0],
     faceKind: 'top',
+    aoWeights: [
+      [-1, 1, 1],
+      [1, 1, 1],
+      [1, 1, -1],
+      [-1, 1, -1]
+    ],
     corners: [
       [0, 1, 1],
       [1, 1, 1],
@@ -29,6 +61,12 @@ const CUBE_FACES: FaceSpec[] = [
   {
     dir: [0, -1, 0],
     faceKind: 'bottom',
+    aoWeights: [
+      [-1, -1, -1],
+      [1, -1, -1],
+      [1, -1, 1],
+      [-1, -1, 1]
+    ],
     corners: [
       [0, 0, 0],
       [1, 0, 0],
@@ -39,6 +77,12 @@ const CUBE_FACES: FaceSpec[] = [
   {
     dir: [1, 0, 0],
     faceKind: 'side',
+    aoWeights: [
+      [1, -1, 1],
+      [1, -1, -1],
+      [1, 1, -1],
+      [1, 1, 1]
+    ],
     corners: [
       [1, 0, 1],
       [1, 0, 0],
@@ -49,6 +93,12 @@ const CUBE_FACES: FaceSpec[] = [
   {
     dir: [-1, 0, 0],
     faceKind: 'side',
+    aoWeights: [
+      [-1, -1, -1],
+      [-1, -1, 1],
+      [-1, 1, 1],
+      [-1, 1, -1]
+    ],
     corners: [
       [0, 0, 0],
       [0, 0, 1],
@@ -59,6 +109,12 @@ const CUBE_FACES: FaceSpec[] = [
   {
     dir: [0, 0, 1],
     faceKind: 'side',
+    aoWeights: [
+      [-1, -1, 1],
+      [1, -1, 1],
+      [1, 1, 1],
+      [-1, 1, 1]
+    ],
     corners: [
       [0, 0, 1],
       [1, 0, 1],
@@ -69,6 +125,12 @@ const CUBE_FACES: FaceSpec[] = [
   {
     dir: [0, 0, -1],
     faceKind: 'side',
+    aoWeights: [
+      [1, -1, -1],
+      [-1, -1, -1],
+      [-1, 1, -1],
+      [1, 1, -1]
+    ],
     corners: [
       [1, 0, 0],
       [0, 0, 0],
@@ -78,12 +140,67 @@ const CUBE_FACES: FaceSpec[] = [
   }
 ];
 
-function pushFaceQuad(
-  positions: number[],
-  normals: number[],
-  colors: number[],
-  uvs: number[],
-  indices: number[],
+interface MeshBuffers {
+  positions: number[];
+  normals: number[];
+  colors: number[];
+  uvs: number[];
+  indices: number[];
+}
+
+function createMeshBuffers(): MeshBuffers {
+  return {
+    positions: [],
+    normals: [],
+    colors: [],
+    uvs: [],
+    indices: []
+  };
+}
+
+function isOccluding(getBlock: BlockLookup, wx: number, wy: number, wz: number): boolean {
+  const id = getBlock(wx, wy, wz);
+  if (id === BlockId.AIR || id === BlockId.WATER || id === BlockId.GLASS || id === BlockId.LEAVES) {
+    return false;
+  }
+  return isBlockSolid(id);
+}
+
+function computeCornerAo(
+  getBlock: BlockLookup,
+  nx: number,
+  ny: number,
+  nz: number,
+  wx: number,
+  wy: number,
+  wz: number,
+  weight: [number, number, number]
+): number {
+  const [sx, sy, sz] = weight;
+  let side1 = false;
+  let side2 = false;
+  let corner = false;
+
+  if (ny !== 0) {
+    side1 = isOccluding(getBlock, wx + sx, wy + ny, wz);
+    side2 = isOccluding(getBlock, wx, wy + ny, wz + sz);
+    corner = isOccluding(getBlock, wx + sx, wy + ny, wz + sz);
+  } else if (nx !== 0) {
+    side1 = isOccluding(getBlock, wx + nx, wy + sy, wz);
+    side2 = isOccluding(getBlock, wx + nx, wy, wz + sz);
+    corner = isOccluding(getBlock, wx + nx, wy + sy, wz + sz);
+  } else {
+    side1 = isOccluding(getBlock, wx + sx, wy, wz + nz);
+    side2 = isOccluding(getBlock, wx, wy + sy, wz + nz);
+    corner = isOccluding(getBlock, wx + sx, wy + sy, wz + nz);
+  }
+
+  const occ = side1 && side2 ? 3 : (side1 ? 1 : 0) + (side2 ? 1 : 0) + (corner ? 1 : 0);
+  return Math.max(0.35, 1.0 - occ * 0.18);
+}
+
+function pushQuad(
+  buf: MeshBuffers,
   x: number,
   y: number,
   z: number,
@@ -92,11 +209,12 @@ function pushFaceQuad(
   nz: number,
   corners: FaceSpec['corners'],
   uv: UvRect,
-  color: THREE.Color
+  baseColor: THREE.Color,
+  aoValues: [number, number, number, number],
+  yOffset = 0
 ): void {
-  const baseVertex = positions.length / 3;
-  // Mapeia (0,1,2,3) dos cantos para (u0,v0), (u1,v0), (u1,v1), (u0,v1)
-  const faceUvs: [number, number][] = [
+  const baseIndex = buf.positions.length / 3;
+  const quadUvs: [number, number][] = [
     [uv.u0, uv.v0],
     [uv.u1, uv.v0],
     [uv.u1, uv.v1],
@@ -105,108 +223,86 @@ function pushFaceQuad(
 
   for (let i = 0; i < 4; i++) {
     const c = corners[i];
-    positions.push(x + c[0], y + c[1], z + c[2]);
-    normals.push(nx, ny, nz);
-    colors.push(color.r, color.g, color.b);
-    uvs.push(faceUvs[i][0], faceUvs[i][1]);
+    const ao = aoValues[i];
+    buf.positions.push(x + c[0], y + c[1] + yOffset, z + c[2]);
+    buf.normals.push(nx, ny, nz);
+    buf.colors.push(
+      Math.min(1, baseColor.r * ao),
+      Math.min(1, baseColor.g * ao),
+      Math.min(1, baseColor.b * ao)
+    );
+    buf.uvs.push(quadUvs[i][0], quadUvs[i][1]);
   }
 
-  indices.push(baseVertex, baseVertex + 1, baseVertex + 2);
-  indices.push(baseVertex, baseVertex + 2, baseVertex + 3);
-}
-
-function pushCrossPlantGeometry(
-  positions: number[],
-  normals: number[],
-  colors: number[],
-  uvs: number[],
-  indices: number[],
-  x: number,
-  y: number,
-  z: number,
-  uv: UvRect,
-  color: THREE.Color
-): void {
-  const diagonals: [[number, number], [number, number]][] = [
-    [
-      [0.15, 0.15],
-      [0.85, 0.85]
-    ],
-    [
-      [0.85, 0.15],
-      [0.15, 0.85]
-    ]
-  ];
-
-  for (const [[x0, z0], [x1, z1]] of diagonals) {
-    const baseVertex = positions.length / 3;
-    const dx = z1 - z0;
-    const dz = -(x1 - x0);
-    const len = Math.hypot(dx, dz) || 1;
-    const nx = dx / len;
-    const nz = dz / len;
-
-    const quadVerts: [number, number, number, number, number][] = [
-      [x + x0, y, z + z0, uv.u0, uv.v0],
-      [x + x1, y, z + z1, uv.u1, uv.v0],
-      [x + x1, y + 0.9, z + z1, uv.u1, uv.v1],
-      [x + x0, y + 0.9, z + z0, uv.u0, uv.v1]
-    ];
-
-    for (const [vx, vy, vz, vu, vv] of quadVerts) {
-      positions.push(vx, vy, vz);
-      normals.push(nx, 0.2, nz);
-      colors.push(color.r, color.g, color.b);
-      uvs.push(vu, vv);
-    }
-
-    indices.push(baseVertex, baseVertex + 1, baseVertex + 2);
-    indices.push(baseVertex, baseVertex + 2, baseVertex + 3);
+  if (aoValues[0] + aoValues[2] > aoValues[1] + aoValues[3]) {
+    buf.indices.push(baseIndex, baseIndex + 1, baseIndex + 2);
+    buf.indices.push(baseIndex, baseIndex + 2, baseIndex + 3);
+  } else {
+    buf.indices.push(baseIndex + 1, baseIndex + 2, baseIndex + 3);
+    buf.indices.push(baseIndex + 1, baseIndex + 3, baseIndex);
   }
 }
 
-export function buildChunkGeometry(
-  chunk: Chunk,
-  getBlockWorld: (wx: number, wy: number, wz: number) => number
-): THREE.BufferGeometry {
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const colors: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
+function finalizeGeometry(buf: MeshBuffers): THREE.BufferGeometry | null {
+  if (buf.indices.length === 0) {
+    return null;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(buf.positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(buf.normals, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(buf.colors, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uvs, 2));
+  geometry.setIndex(buf.indices);
+  geometry.computeBoundingSphere();
+  return geometry;
+}
 
-  const worldOriginX = chunk.cx * CHUNK_SIZE_X;
-  const worldOriginZ = chunk.cz * CHUNK_SIZE_Z;
+function isTransparentBlock(blockId: number): boolean {
+  return blockId === BlockId.WATER || blockId === BlockId.GLASS || blockId === BlockId.LEAVES;
+}
+
+export function buildChunkGeometries(
+  cx: number,
+  cz: number,
+  blocks: Uint8Array,
+  getBlockWorld: BlockLookup
+): ChunkGeometries {
+  const opaqueBuf = createMeshBuffers();
+  const transparentBuf = createMeshBuffers();
+  const originX = cx * CHUNK_SIZE;
+  const originZ = cz * CHUNK_SIZE;
   const tempColor = new THREE.Color();
 
-  for (let y = 0; y < CHUNK_SIZE_Y; y++) {
-    for (let z = 0; z < CHUNK_SIZE_Z; z++) {
-      const wz = worldOriginZ + z;
-      for (let x = 0; x < CHUNK_SIZE_X; x++) {
-        const blockId = chunk.getBlock(x, y, z);
+  for (let y = 0; y < CHUNK_HEIGHT; y++) {
+    for (let z = 0; z < CHUNK_SIZE; z++) {
+      const wz = originZ + z;
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        const idx = x + CHUNK_SIZE * (z + CHUNK_SIZE * y);
+        const blockId = blocks[idx];
         if (blockId === BlockId.AIR) {
           continue;
         }
 
-        const wx = worldOriginX + x;
+        const wx = originX + x;
         const def = getBlockDefinition(blockId);
+        const isTransp = isTransparentBlock(blockId);
+        const targetBuf = isTransp ? transparentBuf : opaqueBuf;
 
-        if (isPlantBlock(blockId)) {
-          const uv = getBlockFaceUvRect(blockId, 'top');
-          tempColor.set(def.colors.top);
-          pushCrossPlantGeometry(positions, normals, colors, uvs, indices, wx, y, wz, uv, tempColor);
-          continue;
-        }
-
-        for (const face of CUBE_FACES) {
+        for (const face of FACES) {
           const [nx, ny, nz] = face.dir;
           const neighborId = getBlockWorld(wx + nx, y + ny, wz + nz);
 
-          if (blockId === BlockId.WATER || blockId === BlockId.GLASS || blockId === BlockId.LEAVES) {
-            if (neighborId === blockId || isBlockOpaque(neighborId)) {
+          if (isTransp) {
+            if (neighborId === blockId) {
               continue;
             }
-          } else if (isBlockOpaque(neighborId)) {
+            if (blockId === BlockId.WATER && isBlockSolid(neighborId)) {
+              continue;
+            }
+            if (blockId !== BlockId.WATER && isBlockSolid(neighborId) && !isTransparentBlock(neighborId)) {
+              continue;
+            }
+          } else if (isBlockSolid(neighborId) && !isTransparentBlock(neighborId)) {
             continue;
           }
 
@@ -219,17 +315,23 @@ export function buildChunkGeometry(
                 : def.colors.side;
           tempColor.set(hex);
 
-          // Variação leve e determinística por coordenada mundial reduz repetição visual
           const hash = Math.abs(Math.sin(wx * 12.9898 + y * 78.233 + wz * 37.719));
           const tonalScale = 0.95 + (hash % 0.1);
           tempColor.multiplyScalar(tonalScale);
 
-          pushFaceQuad(
-            positions,
-            normals,
-            colors,
-            uvs,
-            indices,
+          const ao: [number, number, number, number] = isTransp
+            ? [1, 1, 1, 1]
+            : [
+                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[0]),
+                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[1]),
+                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[2]),
+                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[3])
+              ];
+
+          const yOffset = blockId === BlockId.WATER && face.faceKind === 'top' ? -0.1 : 0;
+
+          pushQuad(
+            targetBuf,
             wx,
             y,
             wz,
@@ -238,19 +340,17 @@ export function buildChunkGeometry(
             nz,
             face.corners,
             uv,
-            tempColor
+            tempColor,
+            ao,
+            yOffset
           );
         }
       }
     }
   }
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geometry.setIndex(indices);
-  geometry.computeBoundingSphere();
-  return geometry;
+  return {
+    opaqueGeometry: finalizeGeometry(opaqueBuf),
+    transparentGeometry: finalizeGeometry(transparentBuf)
+  };
 }

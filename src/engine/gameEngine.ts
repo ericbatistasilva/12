@@ -9,7 +9,8 @@ export class GameEngine {
   public readonly scene: THREE.Scene;
   public readonly camera: THREE.PerspectiveCamera;
   public readonly atlas: BlockAtlasResources;
-  public readonly blockMaterial: THREE.MeshLambertMaterial;
+  public readonly opaqueMaterial: THREE.MeshStandardMaterial;
+  public readonly transparentMaterial: THREE.MeshStandardMaterial;
   private readonly dirLight: THREE.DirectionalLight;
   private readonly fog: THREE.FogExp2;
   private readonly selectionBox: THREE.LineSegments;
@@ -17,6 +18,9 @@ export class GameEngine {
   constructor(canvas: HTMLCanvasElement, initialSettings: GameSettings, atlasSeed = 1337) {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.04;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth || 800, window.innerHeight || 600, false);
     this.renderer.shadowMap.enabled = initialSettings.shadows;
@@ -32,10 +36,10 @@ export class GameEngine {
     const height = window.innerHeight || 600;
     this.camera = new THREE.PerspectiveCamera(initialSettings.fov, width / height, 0.1, 180);
 
-    const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x4b5563, 0.85);
+    const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x4b5563, 0.9);
     this.scene.add(hemiLight);
 
-    this.dirLight = new THREE.DirectionalLight(0xfffbeb, 1.15);
+    this.dirLight = new THREE.DirectionalLight(0xfffbeb, 1.35);
     this.dirLight.position.set(28, 46, 22);
     this.dirLight.castShadow = initialSettings.shadows;
     this.dirLight.shadow.mapSize.width = 1024;
@@ -52,12 +56,23 @@ export class GameEngine {
 
     this.atlas = createBlockTextureAtlas(atlasSeed);
 
-    this.blockMaterial = new THREE.MeshLambertMaterial({
+    this.opaqueMaterial = new THREE.MeshStandardMaterial({
+      map: this.atlas.map,
+      vertexColors: true,
+      roughness: 0.86,
+      metalness: 0.04
+    });
+
+    this.transparentMaterial = new THREE.MeshStandardMaterial({
       map: this.atlas.map,
       vertexColors: true,
       transparent: true,
-      alphaTest: 0.4,
-      side: THREE.DoubleSide
+      opacity: 0.78,
+      alphaTest: 0.35,
+      side: THREE.DoubleSide,
+      roughness: 0.52,
+      metalness: 0.05,
+      depthWrite: false
     });
 
     const boxGeom = new THREE.BoxGeometry(1.006, 1.006, 1.006);
@@ -92,7 +107,7 @@ export class GameEngine {
     );
   }
 
-  syncSunPosition(playerX: number, playerZ: number): void {
+  syncSunWithPlayer(playerX: number, playerZ: number): void {
     this.dirLight.position.set(playerX + 28, 46, playerZ + 22);
     this.dirLight.target.position.set(playerX, 10, playerZ);
     this.dirLight.target.updateMatrixWorld();
@@ -111,7 +126,8 @@ export class GameEngine {
   }
 
   dispose(): void {
-    this.blockMaterial.dispose();
+    this.opaqueMaterial.dispose();
+    this.transparentMaterial.dispose();
     this.atlas.dispose();
     this.selectionBox.geometry.dispose();
     (this.selectionBox.material as THREE.Material).dispose();
