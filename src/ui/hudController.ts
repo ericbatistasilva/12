@@ -1,320 +1,331 @@
-import { GameState, HudSnapshot } from '../core/gameState.js';
-import { BlockId, getBlockDefinition } from '../core/types.js';
+import { GameSettings, WorldMetadata } from '../core/gameState.js';
+import { HOTBAR_SIZE, PLACEABLE_BLOCKS, getBlockDefinition } from '../core/types.js';
+import { InventoryManager } from '../inventory/inventoryManager.js';
+import { TargetBlockHit } from '../building/blockInteraction.js';
+
+export type ScreenOverlay = 'none' | 'menu' | 'inventory' | 'pause' | 'settings';
 
 export interface HudCallbacks {
-  onSelectHotbar: (index: number) => void;
-  onAssignHotbarBlock: (slotIndex: number, blockId: number) => void;
-  onUpdateSettings: (partial: Partial<GameState['settings']>) => void;
-  onSaveWorld: () => void;
-  onReturnToMenu: () => void;
-  onRequestPointerLock: () => void;
+  onStartNewWorld: (name: string, seed: string) => void;
+  onLoadWorld: (worldId: string) => void;
+  onDeleteWorld: (worldId: string) => void;
+  onSelectHotbarSlot: (index: number) => void;
+  onAssignInventoryBlock: (blockId: number) => void;
+  onCloseInventory: () => void;
+  onResumeGame: () => void;
+  onSaveWorldNow: () => void;
+  onOpenSettings: (from: 'menu' | 'pause') => void;
+  onCloseSettings: () => void;
+  onSaveSettings: (settings: GameSettings) => void;
+  onExitToMenu: () => void;
+}
+
+function mustGet<T extends HTMLElement>(id: string): T {
+  const el = document.getElementById(id);
+  if (!el) {
+    throw new Error(`Elemento DOM obrigatório não encontrado: #${id}`);
+  }
+  return el as T;
 }
 
 export class HudController {
-  private readonly root: HTMLElement;
   private readonly callbacks: HudCallbacks;
-  private hotbarEl!: HTMLElement;
-  private debugEl!: HTMLElement;
-  private targetEl!: HTMLElement;
-  private statusEl!: HTMLElement;
-  private inventoryModalEl!: HTMLElement;
-  private settingsModalEl!: HTMLElement;
-  private pauseBannerEl!: HTMLElement;
-  private debugVisible = false;
-  private lastSnapshot: HudSnapshot | null = null;
+  private statusTimeout: number | null = null;
 
-  constructor(root: HTMLElement, callbacks: HudCallbacks) {
-    this.root = root;
+  private readonly crosshairEl = mustGet<HTMLDivElement>('crosshair');
+  private readonly hudTopEl = mustGet<HTMLDivElement>('hud-top');
+  private readonly hotbarContainerEl = mustGet<HTMLDivElement>('hotbar-container');
+  private readonly hotbarSlotsEl = mustGet<HTMLDivElement>('hotbar-slots');
+
+  private readonly hudWorldNameEl = mustGet<HTMLSpanElement>('hud-world-name');
+  private readonly hudCoordsEl = mustGet<HTMLSpanElement>('hud-coords');
+  private readonly hudBiomeEl = mustGet<HTMLSpanElement>('hud-biome');
+  private readonly hudTargetBlockEl = mustGet<HTMLDivElement>('hud-target-block');
+  private readonly hudStatusMsgEl = mustGet<HTMLDivElement>('hud-status-msg');
+
+  private readonly menuScreenEl = mustGet<HTMLElement>('menu-screen');
+  private readonly inventoryScreenEl = mustGet<HTMLElement>('inventory-screen');
+  private readonly pauseScreenEl = mustGet<HTMLElement>('pause-screen');
+  private readonly settingsScreenEl = mustGet<HTMLElement>('settings-screen');
+
+  private readonly worldNameInput = mustGet<HTMLInputElement>('world-name-input');
+  private readonly worldSeedInput = mustGet<HTMLInputElement>('world-seed-input');
+  private readonly savedWorldsListEl = mustGet<HTMLDivElement>('saved-worlds-list');
+  private readonly inventoryGridEl = mustGet<HTMLDivElement>('inventory-grid');
+
+  private readonly renderDistanceSelect = mustGet<HTMLSelectElement>('render-distance-select');
+  private readonly fovRange = mustGet<HTMLInputElement>('fov-range');
+  private readonly fovValue = mustGet<HTMLSpanElement>('fov-value');
+  private readonly sensitivityRange = mustGet<HTMLInputElement>('sensitivity-range');
+  private readonly sensitivityValue = mustGet<HTMLSpanElement>('sensitivity-value');
+  private readonly shadowsToggle = mustGet<HTMLInputElement>('shadows-toggle');
+  private readonly fogToggle = mustGet<HTMLInputElement>('fog-toggle');
+  private readonly sfxVolumeRange = mustGet<HTMLInputElement>('sfx-volume-range');
+  private readonly sfxVolumeValue = mustGet<HTMLSpanElement>('sfx-volume-value');
+  private readonly sfxMuteToggle = mustGet<HTMLInputElement>('sfx-mute-toggle');
+
+  constructor(callbacks: HudCallbacks) {
     this.callbacks = callbacks;
-    this.renderBaseLayout();
     this.bindEvents();
   }
 
-  private renderBaseLayout(): void {
-    this.root.innerHTML = `
-      <div class="hud-crosshair" aria-hidden="true">+</div>
-      <div class="hud-top-bar">
-        <div class="hud-pill" id="hud-world-info">BlockWorld</div>
-        <div class="hud-actions">
-          <button type="button" class="hud-btn" id="hud-btn-inv">Inventário [E]</button>
-          <button type="button" class="hud-btn" id="hud-btn-settings">Gráficos [Esc]</button>
-          <button type="button" class="hud-btn" id="hud-btn-save">Salvar</button>
-          <button type="button" class="hud-btn hud-btn-secondary" id="hud-btn-menu">Menu</button>
-        </div>
-      </div>
-      <div class="hud-target" id="hud-target"></div>
-      <div class="hud-debug hidden" id="hud-debug"></div>
-      <div class="hud-status hidden" id="hud-status"></div>
-      <div class="hud-pause-banner hidden" id="hud-pause-banner">
-        <p>Clique na tela para retomar o controle da câmera</p>
-        <button type="button" class="hud-btn" id="hud-btn-resume">Continuar</button>
-      </div>
-      <div class="hud-hotbar" id="hud-hotbar"></div>
-
-      <div class="hud-modal hidden" id="hud-inventory-modal">
-        <div class="hud-modal-card">
-          <div class="hud-modal-header">
-            <h3>Inventário & Hotbar</h3>
-            <button type="button" class="hud-close" id="hud-close-inv">×</button>
-          </div>
-          <p class="hud-hint">Clique em um bloco para equipá-lo no slot ativo da hotbar.</p>
-          <div class="hud-inv-grid" id="hud-inv-grid"></div>
-        </div>
-      </div>
-
-      <div class="hud-modal hidden" id="hud-settings-modal">
-        <div class="hud-modal-card">
-          <div class="hud-modal-header">
-            <h3>Configurações Gráficas & Áudio</h3>
-            <button type="button" class="hud-close" id="hud-close-settings">×</button>
-          </div>
-          <div class="hud-settings-list">
-            <label class="hud-row">
-              <span>Modo Gráfico</span>
-              <select id="hud-opt-quality">
-                <option value="performance">Performance (Baixo custo)</option>
-                <option value="balanced">Balanced (Equilibrado)</option>
-                <option value="ultra">Ultra (Ultrarrealismo)</option>
-              </select>
-            </label>
-            <label class="hud-row">
-              <span>Distância de Renderização (<span id="hud-val-rd">4</span> chunks)</span>
-              <input type="range" id="hud-opt-rd" min="2" max="8" step="1" value="4" />
-            </label>
-            <label class="hud-row">
-              <span>Campo de Visão / FOV (<span id="hud-val-fov">75</span>°)</span>
-              <input type="range" id="hud-opt-fov" min="55" max="100" step="1" value="75" />
-            </label>
-            <label class="hud-row">
-              <span>Sensibilidade do Mouse (<span id="hud-val-sens">1.0</span>)</span>
-              <input type="range" id="hud-opt-sens" min="0.2" max="2.5" step="0.1" value="1.0" />
-            </label>
-            <label class="hud-row">
-              <span>Sombras em Tempo Real</span>
-              <input type="checkbox" id="hud-opt-shadows" checked />
-            </label>
-            <label class="hud-row">
-              <span>Névoa Atmosférica</span>
-              <input type="checkbox" id="hud-opt-fog" checked />
-            </label>
-            <label class="hud-row">
-              <span>Volume SFX (<span id="hud-val-vol">60</span>%)</span>
-              <input type="range" id="hud-opt-vol" min="0" max="100" step="5" value="60" />
-            </label>
-            <label class="hud-row">
-              <span>Mudo</span>
-              <input type="checkbox" id="hud-opt-mute" />
-            </label>
-          </div>
-        </div>
-      </div>
-    `;
-
-    this.hotbarEl = this.root.querySelector('#hud-hotbar')!;
-    this.debugEl = this.root.querySelector('#hud-debug')!;
-    this.targetEl = this.root.querySelector('#hud-target')!;
-    this.statusEl = this.root.querySelector('#hud-status')!;
-    this.inventoryModalEl = this.root.querySelector('#hud-inventory-modal')!;
-    this.settingsModalEl = this.root.querySelector('#hud-settings-modal')!;
-    this.pauseBannerEl = this.root.querySelector('#hud-pause-banner')!;
-  }
-
   private bindEvents(): void {
-    this.root.querySelector('#hud-btn-inv')!.addEventListener('click', () => this.toggleInventory());
-    this.root.querySelector('#hud-close-inv')!.addEventListener('click', () => this.closeModals());
-    this.root.querySelector('#hud-btn-settings')!.addEventListener('click', () => this.toggleSettings());
-    this.root.querySelector('#hud-close-settings')!.addEventListener('click', () => this.closeModals());
-    this.root.querySelector('#hud-btn-save')!.addEventListener('click', () => this.callbacks.onSaveWorld());
-    this.root.querySelector('#hud-btn-menu')!.addEventListener('click', () => this.callbacks.onReturnToMenu());
-    this.root.querySelector('#hud-btn-resume')!.addEventListener('click', () => {
-      this.closeModals();
-      this.callbacks.onRequestPointerLock();
+    mustGet<HTMLButtonElement>('random-seed-btn').addEventListener('click', () => {
+      const randomNum = Math.floor(100000 + Math.random() * 900000);
+      this.worldSeedInput.value = `BW-${randomNum}`;
     });
 
-    const qualitySel = this.root.querySelector('#hud-opt-quality') as HTMLSelectElement;
-    const rdInput = this.root.querySelector('#hud-opt-rd') as HTMLInputElement;
-    const fovInput = this.root.querySelector('#hud-opt-fov') as HTMLInputElement;
-    const sensInput = this.root.querySelector('#hud-opt-sens') as HTMLInputElement;
-    const shadowsInput = this.root.querySelector('#hud-opt-shadows') as HTMLInputElement;
-    const fogInput = this.root.querySelector('#hud-opt-fog') as HTMLInputElement;
-    const volInput = this.root.querySelector('#hud-opt-vol') as HTMLInputElement;
-    const muteInput = this.root.querySelector('#hud-opt-mute') as HTMLInputElement;
-
-    qualitySel.addEventListener('change', () => {
-      const mode = qualitySel.value as 'performance' | 'balanced' | 'ultra';
-      this.callbacks.onUpdateSettings({ qualityMode: mode });
+    mustGet<HTMLButtonElement>('start-new-world-btn').addEventListener('click', () => {
+      const name = this.worldNameInput.value.trim() || 'Novo Mundo';
+      const seed = this.worldSeedInput.value.trim() || `seed-${Date.now()}`;
+      this.callbacks.onStartNewWorld(name, seed);
     });
 
-    rdInput.addEventListener('input', () => {
-      const renderDistance = Number(rdInput.value);
-      (this.root.querySelector('#hud-val-rd') as HTMLElement).textContent = String(renderDistance);
-      this.callbacks.onUpdateSettings({ renderDistance });
+    mustGet<HTMLButtonElement>('open-menu-settings-btn').addEventListener('click', () => {
+      this.callbacks.onOpenSettings('menu');
     });
 
-    fovInput.addEventListener('input', () => {
-      const fov = Number(fovInput.value);
-      (this.root.querySelector('#hud-val-fov') as HTMLElement).textContent = String(fov);
-      this.callbacks.onUpdateSettings({ fov });
+    mustGet<HTMLButtonElement>('open-pause-settings-btn').addEventListener('click', () => {
+      this.callbacks.onOpenSettings('pause');
     });
 
-    sensInput.addEventListener('input', () => {
-      const mouseSensitivity = Number(sensInput.value);
-      (this.root.querySelector('#hud-val-sens') as HTMLElement).textContent = mouseSensitivity.toFixed(1);
-      this.callbacks.onUpdateSettings({ mouseSensitivity });
+    mustGet<HTMLButtonElement>('close-inventory-btn').addEventListener('click', () => {
+      this.callbacks.onCloseInventory();
     });
 
-    shadowsInput.addEventListener('change', () => {
-      this.callbacks.onUpdateSettings({ shadows: shadowsInput.checked });
+    mustGet<HTMLButtonElement>('resume-game-btn').addEventListener('click', () => {
+      this.callbacks.onResumeGame();
     });
 
-    fogInput.addEventListener('change', () => {
-      this.callbacks.onUpdateSettings({ fog: fogInput.checked });
+    mustGet<HTMLButtonElement>('save-world-btn').addEventListener('click', () => {
+      this.callbacks.onSaveWorldNow();
     });
 
-    volInput.addEventListener('input', () => {
-      const pct = Number(volInput.value);
-      (this.root.querySelector('#hud-val-vol') as HTMLElement).textContent = String(pct);
-      this.callbacks.onUpdateSettings({ sfxVolume: pct / 100 });
+    mustGet<HTMLButtonElement>('exit-to-menu-btn').addEventListener('click', () => {
+      this.callbacks.onExitToMenu();
     });
 
-    muteInput.addEventListener('change', () => {
-      this.callbacks.onUpdateSettings({ muted: muteInput.checked });
+    mustGet<HTMLButtonElement>('close-settings-btn').addEventListener('click', () => {
+      this.callbacks.onCloseSettings();
+    });
+
+    this.fovRange.addEventListener('input', () => {
+      this.fovValue.textContent = `${this.fovRange.value}°`;
+    });
+
+    this.sensitivityRange.addEventListener('input', () => {
+      this.sensitivityValue.textContent = `${Number(this.sensitivityRange.value).toFixed(1)}x`;
+    });
+
+    this.sfxVolumeRange.addEventListener('input', () => {
+      this.sfxVolumeValue.textContent = `${this.sfxVolumeRange.value}%`;
+    });
+
+    mustGet<HTMLButtonElement>('save-settings-btn').addEventListener('click', () => {
+      const updated: GameSettings = {
+        renderDistance: Number(this.renderDistanceSelect.value) || 3,
+        fov: Number(this.fovRange.value) || 75,
+        mouseSensitivity: Number(this.sensitivityRange.value) || 1.0,
+        shadows: this.shadowsToggle.checked,
+        fog: this.fogToggle.checked,
+        sfxVolume: (Number(this.sfxVolumeRange.value) || 0) / 100,
+        muted: this.sfxMuteToggle.checked
+      };
+      this.callbacks.onSaveSettings(updated);
     });
   }
 
-  toggleDebug(): void {
-    this.debugVisible = !this.debugVisible;
-    this.debugEl.classList.toggle('hidden', !this.debugVisible);
+  setScreen(screen: ScreenOverlay, inGame: boolean): void {
+    this.menuScreenEl.classList.toggle('hidden', screen !== 'menu');
+    this.menuScreenEl.classList.toggle('active', screen === 'menu');
+
+    this.inventoryScreenEl.classList.toggle('hidden', screen !== 'inventory');
+    this.inventoryScreenEl.classList.toggle('active', screen === 'inventory');
+
+    this.pauseScreenEl.classList.toggle('hidden', screen !== 'pause');
+    this.pauseScreenEl.classList.toggle('active', screen === 'pause');
+
+    this.settingsScreenEl.classList.toggle('hidden', screen !== 'settings');
+    this.settingsScreenEl.classList.toggle('active', screen === 'settings');
+
+    const showHud = inGame && screen === 'none';
+    this.crosshairEl.classList.toggle('hidden', !showHud);
+    this.hudTopEl.classList.toggle('hidden', !showHud);
+    this.hotbarContainerEl.classList.toggle('hidden', !showHud);
   }
 
-  toggleInventory(): void {
-    const isHidden = this.inventoryModalEl.classList.contains('hidden');
-    this.closeModals();
-    if (isHidden) {
-      this.inventoryModalEl.classList.remove('hidden');
-      if (document.pointerLockElement) {
-        document.exitPointerLock();
-      }
-      if (this.lastSnapshot) {
-        this.renderInventoryGrid(this.lastSnapshot);
-      }
+  populateSettingsForm(settings: GameSettings): void {
+    this.renderDistanceSelect.value = String(settings.renderDistance);
+    this.fovRange.value = String(settings.fov);
+    this.fovValue.textContent = `${settings.fov}°`;
+    this.sensitivityRange.value = String(settings.mouseSensitivity);
+    this.sensitivityValue.textContent = `${settings.mouseSensitivity.toFixed(1)}x`;
+    this.shadowsToggle.checked = settings.shadows;
+    this.fogToggle.checked = settings.fog;
+    const pct = Math.round(settings.sfxVolume * 100);
+    this.sfxVolumeRange.value = String(pct);
+    this.sfxVolumeValue.textContent = `${pct}%`;
+    this.sfxMuteToggle.checked = settings.muted;
+  }
+
+  renderSavedWorlds(worlds: WorldMetadata[]): void {
+    this.savedWorldsListEl.innerHTML = '';
+    if (worlds.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'empty-worlds';
+      empty.textContent = 'Nenhum mundo salvo ainda. Crie um novo mundo acima para começar.';
+      this.savedWorldsListEl.appendChild(empty);
+      return;
+    }
+
+    for (const world of worlds) {
+      const card = document.createElement('div');
+      card.className = 'world-card';
+
+      const info = document.createElement('div');
+      info.className = 'world-card-info';
+      const title = document.createElement('strong');
+      title.textContent = world.name;
+      const meta = document.createElement('span');
+      const dateStr = new Date(world.updatedAt).toLocaleString('pt-BR');
+      meta.textContent = `Semente: ${world.seed} • Atualizado: ${dateStr}`;
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'world-card-actions';
+
+      const loadBtn = document.createElement('button');
+      loadBtn.type = 'button';
+      loadBtn.className = 'btn btn-primary btn-sm';
+      loadBtn.textContent = 'Jogar';
+      loadBtn.addEventListener('click', () => this.callbacks.onLoadWorld(world.id));
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn btn-danger btn-sm';
+      delBtn.textContent = 'Excluir';
+      delBtn.addEventListener('click', () => this.callbacks.onDeleteWorld(world.id));
+
+      actions.appendChild(loadBtn);
+      actions.appendChild(delBtn);
+
+      card.appendChild(info);
+      card.appendChild(actions);
+      this.savedWorldsListEl.appendChild(card);
     }
   }
 
-  toggleSettings(): void {
-    const isHidden = this.settingsModalEl.classList.contains('hidden');
-    this.closeModals();
-    if (isHidden) {
-      this.settingsModalEl.classList.remove('hidden');
-      if (document.pointerLockElement) {
-        document.exitPointerLock();
-      }
-      if (this.lastSnapshot) {
-        this.syncSettingsInputs(this.lastSnapshot);
-      }
-    }
-  }
+  renderHotbar(inventory: InventoryManager): void {
+    this.hotbarSlotsEl.innerHTML = '';
 
-  closeModals(): void {
-    this.inventoryModalEl.classList.add('hidden');
-    this.settingsModalEl.classList.add('hidden');
-  }
-
-  hasOpenModal(): boolean {
-    return (
-      !this.inventoryModalEl.classList.contains('hidden') ||
-      !this.settingsModalEl.classList.contains('hidden')
-    );
-  }
-
-  private syncSettingsInputs(snap: HudSnapshot): void {
-    (this.root.querySelector('#hud-opt-quality') as HTMLSelectElement).value = snap.qualityMode;
-    (this.root.querySelector('#hud-opt-rd') as HTMLInputElement).value = String(snap.settings.renderDistance);
-    (this.root.querySelector('#hud-val-rd') as HTMLElement).textContent = String(snap.settings.renderDistance);
-    (this.root.querySelector('#hud-opt-fov') as HTMLInputElement).value = String(snap.settings.fov);
-    (this.root.querySelector('#hud-val-fov') as HTMLElement).textContent = String(snap.settings.fov);
-    (this.root.querySelector('#hud-opt-sens') as HTMLInputElement).value = String(snap.settings.mouseSensitivity);
-    (this.root.querySelector('#hud-val-sens') as HTMLElement).textContent = snap.settings.mouseSensitivity.toFixed(1);
-    (this.root.querySelector('#hud-opt-shadows') as HTMLInputElement).checked = snap.settings.shadows;
-    (this.root.querySelector('#hud-opt-fog') as HTMLInputElement).checked = snap.settings.fog;
-    const volPct = Math.round(snap.settings.sfxVolume * 100);
-    (this.root.querySelector('#hud-opt-vol') as HTMLInputElement).value = String(volPct);
-    (this.root.querySelector('#hud-val-vol') as HTMLElement).textContent = String(volPct);
-    (this.root.querySelector('#hud-opt-mute') as HTMLInputElement).checked = snap.settings.muted;
-  }
-
-  private renderInventoryGrid(snap: HudSnapshot): void {
-    const grid = this.root.querySelector('#hud-inv-grid')!;
-    grid.innerHTML = '';
-    for (const slot of snap.inventory) {
-      if (slot.blockId === BlockId.AIR) continue;
-      const def = getBlockDefinition(slot.blockId);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'hud-inv-item';
-      btn.innerHTML = `
-        <span class="hud-swatch" style="background:${def.colors.top}"></span>
-        <span class="hud-inv-name">${def.name}</span>
-        <span class="hud-inv-count">x${slot.count}</span>
-      `;
-      btn.addEventListener('click', () => {
-        this.callbacks.onAssignHotbarBlock(snap.selectedSlot, slot.blockId);
-        this.closeModals();
-      });
-      grid.appendChild(btn);
-    }
-  }
-
-  update(snapshot: HudSnapshot): void {
-    this.lastSnapshot = snapshot;
-
-    const infoEl = this.root.querySelector('#hud-world-info') as HTMLElement;
-    infoEl.textContent = `${snapshot.worldName} · ${snapshot.qualityMode.toUpperCase()} · Seed: ${snapshot.seed}`;
-
-    if (snapshot.targetBlock) {
-      this.targetEl.textContent = `${snapshot.targetBlock.name} (${snapshot.targetBlock.distance.toFixed(1)}m)`;
-    } else {
-      this.targetEl.textContent = '';
-    }
-
-    if (this.debugVisible) {
-      this.debugEl.innerHTML = [
-        `FPS: ${snapshot.fps}`,
-        `Modo: ${snapshot.qualityMode.toUpperCase()}`,
-        `Pos: ${snapshot.position.x.toFixed(1)}, ${snapshot.position.y.toFixed(1)}, ${snapshot.position.z.toFixed(1)}`,
-        `Chunk: ${snapshot.chunk.cx}, ${snapshot.chunk.cz} (${snapshot.loadedChunks} ativos)`
-      ].join('<br/>');
-    }
-
-    if (snapshot.statusMessage) {
-      this.statusEl.textContent = snapshot.statusMessage;
-      this.statusEl.classList.remove('hidden');
-    } else {
-      this.statusEl.classList.add('hidden');
-    }
-
-    const showPause = !snapshot.pointerLocked && !this.hasOpenModal();
-    this.pauseBannerEl.classList.toggle('hidden', !showPause);
-
-    this.hotbarEl.innerHTML = '';
-    snapshot.hotbarBlockIds.forEach((blockId, idx) => {
+    for (let i = 0; i < HOTBAR_SIZE; i++) {
+      const blockId = inventory.hotbarBlockIds[i];
       const def = getBlockDefinition(blockId);
-      const count = snapshot.inventory.find((s) => s.blockId === blockId)?.count ?? 0;
-      const slotEl = document.createElement('button');
-      slotEl.type = 'button';
-      slotEl.className = `hud-slot ${idx === snapshot.selectedSlot ? 'active' : ''}`;
-      slotEl.innerHTML = `
-        <span class="hud-slot-key">${idx + 1}</span>
-        <span class="hud-swatch" style="background:${def.colors.top}"></span>
-        <span class="hud-slot-name">${def.name}</span>
-        <span class="hud-slot-count">${count}</span>
-      `;
-      slotEl.addEventListener('click', () => this.callbacks.onSelectHotbar(idx));
-      this.hotbarEl.appendChild(slotEl);
-    });
+      const count = inventory.getCount(blockId);
+
+      const slotBtn = document.createElement('button');
+      slotBtn.type = 'button';
+      slotBtn.className = `hotbar-slot ${i === inventory.selectedHotbarIndex ? 'selected' : ''}`;
+      slotBtn.title = `${def.name} (${count})`;
+
+      const keyBadge = document.createElement('span');
+      keyBadge.className = 'slot-key';
+      keyBadge.textContent = String((i + 1) % 10);
+
+      const swatch = document.createElement('span');
+      swatch.className = 'block-swatch';
+      swatch.style.background = `linear-gradient(135deg, ${def.colors.top} 45%, ${def.colors.side} 45%)`;
+
+      const label = document.createElement('span');
+      label.className = 'slot-name';
+      label.textContent = def.name;
+
+      const countBadge = document.createElement('span');
+      countBadge.className = 'slot-count';
+      countBadge.textContent = String(count);
+
+      slotBtn.appendChild(keyBadge);
+      slotBtn.appendChild(swatch);
+      slotBtn.appendChild(label);
+      slotBtn.appendChild(countBadge);
+
+      slotBtn.addEventListener('click', () => {
+        this.callbacks.onSelectHotbarSlot(i);
+      });
+
+      this.hotbarSlotsEl.appendChild(slotBtn);
+    }
   }
 
-  dispose(): void {
-    this.root.innerHTML = '';
+  renderInventoryModal(inventory: InventoryManager): void {
+    this.inventoryGridEl.innerHTML = '';
+    const selectedBlockId = inventory.getSelectedBlockId();
+
+    const blockIds = Array.from(new Set([...PLACEABLE_BLOCKS, ...inventory.slots.map((s) => s.blockId)]));
+
+    for (const blockId of blockIds) {
+      const def = getBlockDefinition(blockId);
+      const count = inventory.getCount(blockId);
+
+      const itemBtn = document.createElement('button');
+      itemBtn.type = 'button';
+      itemBtn.className = `inv-item ${blockId === selectedBlockId ? 'active-slot' : ''}`;
+
+      const swatch = document.createElement('span');
+      swatch.className = 'block-swatch large';
+      swatch.style.background = `linear-gradient(135deg, ${def.colors.top} 45%, ${def.colors.side} 45%)`;
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'inv-name';
+      nameEl.textContent = def.name;
+
+      const countEl = document.createElement('span');
+      countEl.className = 'inv-count';
+      countEl.textContent = `Qtd: ${count}`;
+
+      itemBtn.appendChild(swatch);
+      itemBtn.appendChild(nameEl);
+      itemBtn.appendChild(countEl);
+
+      itemBtn.addEventListener('click', () => {
+        this.callbacks.onAssignInventoryBlock(blockId);
+      });
+
+      this.inventoryGridEl.appendChild(itemBtn);
+    }
+  }
+
+  updateHudTelemetry(
+    worldName: string,
+    x: number,
+    y: number,
+    z: number,
+    biome: string,
+    target: TargetBlockHit | null
+  ): void {
+    this.hudWorldNameEl.textContent = worldName;
+    this.hudCoordsEl.textContent = `X: ${x.toFixed(1)} | Y: ${y.toFixed(1)} | Z: ${z.toFixed(1)}`;
+    this.hudBiomeEl.textContent = `Bioma: ${biome}`;
+
+    if (target) {
+      const def = getBlockDefinition(target.blockId);
+      this.hudTargetBlockEl.textContent = `Alvo: ${def.name} (${target.blockPos.x}, ${target.blockPos.y}, ${target.blockPos.z})`;
+    } else {
+      this.hudTargetBlockEl.textContent = 'Nenhum bloco alvo';
+    }
+  }
+
+  showToast(message: string, durationMs = 2000): void {
+    this.hudStatusMsgEl.textContent = message;
+    this.hudStatusMsgEl.classList.remove('hidden');
+
+    if (this.statusTimeout !== null) {
+      window.clearTimeout(this.statusTimeout);
+    }
+    this.statusTimeout = window.setTimeout(() => {
+      this.hudStatusMsgEl.classList.add('hidden');
+      this.statusTimeout = null;
+    }, durationMs);
   }
 }
