@@ -1,277 +1,272 @@
 import * as THREE from 'three';
+import { BlockId } from '../core/types.js';
 import {
-  BlockId,
+  Chunk,
   CHUNK_SIZE_X,
   CHUNK_SIZE_Z,
-  WORLD_HEIGHT,
-  isBlockSolid
-} from '../core/types.js';
-import type { SerializedChunk } from '../core/gameState.js';
-import { buildChunkGeometries } from './chunkMeshBuilder.js';
+  chunkKey,
+  parseChunkKey,
+  worldToChunkCoord,
+  worldToLocalCoord
+} from './chunk.js';
 import { WorldGenerator } from './worldGenerator.js';
+import { buildChunkMesh, ChunkMeshData } from './chunkMeshBuilder.js';
 
-export interface ChunkRecord {
-  cx: number;
-  cz: number;
-  key: string;
-  blocks: Uint8Array;
-  modified: boolean;
-  dirtyMesh: boolean;
-  opaqueMesh: THREE.Mesh | null;
-  transparentMesh: THREE.Mesh | null;
-}
-
-export function chunkKey(cx: number, cz: number): string {
-  return `${cx},${cz}`;
-}
-
-export function worldToChunkCoords(wx: number, wz: number): { cx: number; cz: number; lx: number; lz: number } {
-  const fx = Math.floor(wx);
-  const fz = Math.floor(wz);
-  const cx = Math.floor(fx / CHUNK_SIZE_X);
-  const cz = Math.floor(fz / CHUNK_SIZE_Z);
-  const lx = ((fx % CHUNK_SIZE_X) + CHUNK_SIZE_X) % CHUNK_SIZE_X;
-  const lz = ((fz % CHUNK_SIZE_Z) + CHUNK_SIZE_Z) % CHUNK_SIZE_Z;
-  return { cx, cz, lx, lz };
+interface ChunkRecord {
+  chunk: Chunk;
+  meshData: ChunkMeshData;
+  group: THREE.Group;
+  dirty: boolean;
 }
 
 export class ChunkManager {
-  public readonly generator: WorldGenerator;
-  private readonly chunks: Map<string, ChunkRecord> = new Map();
-  private readonly scene: THREE.Scene | null;
-  private readonly opaqueMaterial: THREE.Material | null;
-  private readonly transparentMaterial: THREE.Material | null;
+  private readonly scene: THREE.Scene;
+  private readonly generator: WorldGenerator;
+  private readonly materials: {
+    opaqueMaterial: THREE.Material;
+    foliageMaterial: THREE.Material;
+    glassMaterial: THREE.Material;
+    waterMaterial: THREE.Material;
+  };
+  private readonly records = new Map<string, ChunkRecord>();
+  private readonly buildQueue: string[] = [];
+  private readonly queuedSet = new Set<string>();
+  private aoStrength = 0.55;
+  private shadowsEnabled = true;
 
   constructor(
+    scene: THREE.Scene,
     generator: WorldGenerator,
-    scene: THREE.Scene | null = null,
-    opaqueMaterial: THREE.Material | null = null,
-    transparentMaterial: THREE.Material | null = null
+    materials: {
+      opaqueMaterial: THREE.Material;
+      foliageMaterial: THREE.Material;
+      glassMaterial: THREE.Material;
+      waterMaterial: THREE.Material;
+    },
+    options?: {
+      aoStrength?: number;
+      shadowsEnabled?: boolean;
+    }
   ) {
-    this.generator = generator;
     this.scene = scene;
-    this.opaqueMaterial = opaqueMaterial;
-    this.transparentMaterial = transparentMaterial;
+    this.generator = generator;
+    this.materials = materials;
+    this.aoStrength = options?.aoStrength ?? 0.55;
+    this.shadowsEnabled = options?.shadowsEnabled ?? true;
   }
 
-  getLoadedChunkCount(): number {
-    return this.chunks.size;
-  }
+  setVisualOptions(options: { aoStrength: number; shadowsEnabled: boolean }): void {
+    const aoChanged = Math.abs(this.aoStrength - options.aoStrength) > 0.001;
+    const shadowChanged = this.shadowsEnabled !== options.shadowsEnabled;
+    this.aoStrength = options.aoStrength;
+    this.shadowsEnabled = options.shadowsEnabled;
 
-  getChunk(cx: number, cz: number): ChunkRecord | undefined {
-    return this.chunks.get(chunkKey(cx, cz));
-  }
-
-  loadSavedChunks(savedChunks: SerializedChunk[]): void {
-    for (const sc of savedChunks) {
-      const key = chunkKey(sc.cx, sc.cz);
-      const blocks = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
-      const len = Math.min(blocks.length, sc.blocks.length);
-      for (let i = 0; i < len; i++) {
-        blocks[i] = sc.blocks[i];
-      }
-      const existing = this.chunks.get(key);
-      if (existing) {
-        existing.blocks = blocks;
-        existing.modified = true;
-        existing.dirtyMesh = true;
-      } else {
-        this.chunks.set(key, {
-          cx: sc.cx,
-          cz: sc.cz,
-          key,
-          blocks,
-          modified: true,
-          dirtyMesh: true,
-          opaqueMesh: null,
-          transparentMesh: null
-        });
+    if (aoChanged || shadowChanged) {
+      for (const rec of this.records.values()) {
+        rec.dirty = true;
+        this.enqueueKey(chunkKey(rec.chunk.cx, rec.chunk.cz));
       }
     }
   }
 
-  ensureChunk(cx: number, cz: number): ChunkRecord {
+  private enqueueKey(key: string): void {
+    if (this.queuedSet.has(key)) {
+      return;
+    }
+    this.queuedSet.add(key);
+    this.buildQueue.push(key);
+  }
+
+  getOrCreateChunk(cx: number, cz: number): Chunk {
     const key = chunkKey(cx, cz);
-    const existing = this.chunks.get(key);
+    const existing = this.records.get(key);
     if (existing) {
-      return existing;
+      return existing.chunk;
     }
-    const blocks = this.generator.generateChunkBlocks(cx, cz);
-    const record: ChunkRecord = {
-      cx,
-      cz,
-      key,
-      blocks,
-      modified: false,
-      dirtyMesh: true,
-      opaqueMesh: null,
-      transparentMesh: null
-    };
-    this.chunks.set(key, record);
-    return record;
+
+    const chunk = this.generator.generateChunk(cx, cz);
+    const group = new THREE.Group();
+    this.scene.add(group);
+
+    const meshData = buildChunkMesh(chunk, this.getBlockWorld.bind(this), this.materials, {
+      aoStrength: this.aoStrength,
+      castShadow: this.shadowsEnabled,
+      receiveShadow: this.shadowsEnabled
+    });
+    this.attachMeshesToGroup(group, meshData);
+
+    this.records.set(key, {
+      chunk,
+      meshData,
+      group,
+      dirty: false
+    });
+
+    return chunk;
   }
 
-  getBlockAt(wx: number, wy: number, wz: number): number {
-    const y = Math.floor(wy);
-    if (y < 0 || y >= WORLD_HEIGHT) {
-      return BlockId.AIR;
-    }
-    const { cx, cz, lx, lz } = worldToChunkCoords(wx, wz);
-    const existing = this.chunks.get(chunkKey(cx, cz));
-    if (!existing) {
-      const generated = this.generator.generateChunkBlocks(cx, cz);
-      const idx = y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx;
-      return generated[idx];
-    }
-    const idx = y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx;
-    return existing.blocks[idx];
+  private attachMeshesToGroup(group: THREE.Group, meshData: ChunkMeshData): void {
+    group.clear();
+    if (meshData.opaqueMesh) group.add(meshData.opaqueMesh);
+    if (meshData.foliageMesh) group.add(meshData.foliageMesh);
+    if (meshData.glassMesh) group.add(meshData.glassMesh);
+    if (meshData.waterMesh) group.add(meshData.waterMesh);
   }
 
-  isSolidAt(wx: number, wy: number, wz: number): boolean {
-    return isBlockSolid(this.getBlockAt(wx, wy, wz));
+  rebuildChunkMesh(cx: number, cz: number): void {
+    const key = chunkKey(cx, cz);
+    const record = this.records.get(key);
+    if (!record) {
+      return;
+    }
+
+    const nextMeshData = buildChunkMesh(record.chunk, this.getBlockWorld.bind(this), this.materials, {
+      aoStrength: this.aoStrength,
+      castShadow: this.shadowsEnabled,
+      receiveShadow: this.shadowsEnabled
+    });
+    this.attachMeshesToGroup(record.group, nextMeshData);
+    record.meshData.dispose();
+    record.meshData = nextMeshData;
+    record.dirty = false;
   }
 
-  setBlockAt(wx: number, wy: number, wz: number, blockId: number): boolean {
-    const x = Math.floor(wx);
-    const y = Math.floor(wy);
-    const z = Math.floor(wz);
-    if (y < 0 || y >= WORLD_HEIGHT) {
+  getBlockWorld(wx: number, wy: number, wz: number): number {
+    const fx = Math.floor(wx);
+    const fy = Math.floor(wy);
+    const fz = Math.floor(wz);
+    const { cx, cz } = worldToChunkCoord(fx, fz);
+    const key = chunkKey(cx, cz);
+    const existing = this.records.get(key);
+    if (existing) {
+      const { lx, lz } = worldToLocalCoord(fx, fz);
+      return existing.chunk.getBlock(lx, fy, lz);
+    }
+    return this.generator.getBlockAt(fx, fy, fz);
+  }
+
+  setBlockWorld(wx: number, wy: number, wz: number, blockId: number): boolean {
+    const fx = Math.floor(wx);
+    const fy = Math.floor(wy);
+    const fz = Math.floor(wz);
+    const { cx, cz } = worldToChunkCoord(fx, fz);
+    const chunk = this.getOrCreateChunk(cx, cz);
+    const { lx, lz } = worldToLocalCoord(fx, fz);
+
+    if (!chunk.setBlock(lx, fy, lz, blockId)) {
       return false;
     }
 
-    const { cx, cz, lx, lz } = worldToChunkCoords(x, z);
-    const chunk = this.ensureChunk(cx, cz);
-    const idx = y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx;
+    this.rebuildChunkMesh(cx, cz);
 
-    if (chunk.blocks[idx] === blockId) {
-      return false;
-    }
-
-    chunk.blocks[idx] = blockId;
-    chunk.modified = true;
-    chunk.dirtyMesh = true;
-
-    // Marca chunks vizinhos se o bloco alterado estiver na borda do chunk
-    if (lx === 0) this.markDirtyIfLoaded(cx - 1, cz);
-    if (lx === CHUNK_SIZE_X - 1) this.markDirtyIfLoaded(cx + 1, cz);
-    if (lz === 0) this.markDirtyIfLoaded(cx, cz - 1);
-    if (lz === CHUNK_SIZE_Z - 1) this.markDirtyIfLoaded(cx, cz + 1);
+    if (lx === 0) this.markDirtyAndQueue(cx - 1, cz);
+    if (lx === CHUNK_SIZE_X - 1) this.markDirtyAndQueue(cx + 1, cz);
+    if (lz === 0) this.markDirtyAndQueue(cx, cz - 1);
+    if (lz === CHUNK_SIZE_Z - 1) this.markDirtyAndQueue(cx, cz + 1);
 
     return true;
   }
 
-  private markDirtyIfLoaded(cx: number, cz: number): void {
-    const neighbor = this.chunks.get(chunkKey(cx, cz));
-    if (neighbor) {
-      neighbor.dirtyMesh = true;
+  private markDirtyAndQueue(cx: number, cz: number): void {
+    const key = chunkKey(cx, cz);
+    const rec = this.records.get(key);
+    if (rec) {
+      rec.dirty = true;
+      this.enqueueKey(key);
     }
   }
 
-  updateAroundPosition(posX: number, posZ: number, renderDistance: number, maxMeshRebuildsPerFrame = 3): void {
-    const center = worldToChunkCoords(posX, posZ);
-    const desiredKeys = new Set<string>();
+  updateAroundPlayer(
+    playerX: number,
+    playerZ: number,
+    renderDistance: number,
+    maxChunkOperationsPerFrame = 3
+  ): void {
+    const center = worldToChunkCoord(Math.floor(playerX), Math.floor(playerZ));
+    const candidates: Array<{ cx: number; cz: number; distSq: number }> = [];
 
     for (let dz = -renderDistance; dz <= renderDistance; dz++) {
       for (let dx = -renderDistance; dx <= renderDistance; dx++) {
+        const distSq = dx * dx + dz * dz;
+        if (distSq > renderDistance * renderDistance + 1) {
+          continue;
+        }
         const cx = center.cx + dx;
         const cz = center.cz + dz;
         const key = chunkKey(cx, cz);
-        desiredKeys.add(key);
-        this.ensureChunk(cx, cz);
-      }
-    }
-
-    // Descarrega chunks distantes (preservando os modificados na memória até salvar)
-    for (const [key, record] of this.chunks.entries()) {
-      if (!desiredKeys.has(key)) {
-        this.disposeChunkMesh(record);
-        if (!record.modified) {
-          this.chunks.delete(key);
+        if (!this.records.has(key)) {
+          candidates.push({ cx, cz, distSq });
         }
       }
     }
 
-    // Reconstrói malhas pendentes de forma fatiada para manter fluidez
-    let rebuilt = 0;
-    for (const record of this.chunks.values()) {
-      if (record.dirtyMesh && desiredKeys.has(record.key)) {
-        this.rebuildChunkMesh(record);
-        rebuilt++;
-        if (rebuilt >= maxMeshRebuildsPerFrame) {
-          break;
-        }
+    candidates.sort((a, b) => a.distSq - b.distSq);
+
+    let ops = 0;
+    for (const c of candidates) {
+      if (ops >= maxChunkOperationsPerFrame) break;
+      this.getOrCreateChunk(c.cx, c.cz);
+      ops++;
+    }
+
+    while (ops < maxChunkOperationsPerFrame && this.buildQueue.length > 0) {
+      const nextKey = this.buildQueue.shift()!;
+      this.queuedSet.delete(nextKey);
+      const rec = this.records.get(nextKey);
+      if (rec && rec.dirty) {
+        this.rebuildChunkMesh(rec.chunk.cx, rec.chunk.cz);
+        ops++;
+      }
+    }
+
+    const unloadRadiusSq = (renderDistance + 2) * (renderDistance + 2);
+    for (const [key, rec] of this.records.entries()) {
+      const parsed = parseChunkKey(key);
+      const dx = parsed.cx - center.cx;
+      const dz = parsed.cz - center.cz;
+      if (dx * dx + dz * dz > unloadRadiusSq) {
+        this.scene.remove(rec.group);
+        rec.meshData.dispose();
+        this.records.delete(key);
       }
     }
   }
 
-  rebuildAllDirtyMeshes(): void {
-    for (const record of this.chunks.values()) {
-      if (record.dirtyMesh) {
-        this.rebuildChunkMesh(record);
-      }
-    }
+  getLoadedChunkCount(): number {
+    return this.records.size;
   }
 
-  rebuildChunkMesh(record: ChunkRecord): void {
-    this.disposeChunkMesh(record);
-    record.dirtyMesh = false;
-
-    if (!this.scene || !this.opaqueMaterial || !this.transparentMaterial) {
-      return;
-    }
-
-    const built = buildChunkGeometries(record.cx, record.cz, record.blocks, this);
-
-    if (built.opaqueGeometry) {
-      const mesh = new THREE.Mesh(built.opaqueGeometry, this.opaqueMaterial);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.frustumCulled = true;
-      this.scene.add(mesh);
-      record.opaqueMesh = mesh;
-    }
-
-    if (built.transparentGeometry) {
-      const mesh = new THREE.Mesh(built.transparentGeometry, this.transparentMaterial);
-      mesh.castShadow = false;
-      mesh.receiveShadow = true;
-      mesh.frustumCulled = true;
-      this.scene.add(mesh);
-      record.transparentMesh = mesh;
-    }
-  }
-
-  private disposeChunkMesh(record: ChunkRecord): void {
-    if (record.opaqueMesh) {
-      this.scene?.remove(record.opaqueMesh);
-      record.opaqueMesh.geometry.dispose();
-      record.opaqueMesh = null;
-    }
-    if (record.transparentMesh) {
-      this.scene?.remove(record.transparentMesh);
-      record.transparentMesh.geometry.dispose();
-      record.transparentMesh = null;
-    }
-  }
-
-  getModifiedChunksSerialized(): SerializedChunk[] {
-    const result: SerializedChunk[] = [];
-    for (const record of this.chunks.values()) {
-      if (record.modified) {
-        result.push({
-          cx: record.cx,
-          cz: record.cz,
-          blocks: Array.from(record.blocks)
+  exportModifiedChunks(
+    isModified: (cx: number, cz: number, chunk: Chunk) => boolean
+  ): Array<{ cx: number; cz: number; blocks: number[] }> {
+    const out: Array<{ cx: number; cz: number; blocks: number[] }> = [];
+    for (const rec of this.records.values()) {
+      if (isModified(rec.chunk.cx, rec.chunk.cz, rec.chunk)) {
+        out.push({
+          cx: rec.chunk.cx,
+          cz: rec.chunk.cz,
+          blocks: Array.from(rec.chunk.blocks)
         });
       }
     }
-    return result;
+    return out;
   }
 
-  disposeAll(): void {
-    for (const record of this.chunks.values()) {
-      this.disposeChunkMesh(record);
+  applySavedChunk(cx: number, cz: number, blocks: number[]): void {
+    const chunk = this.getOrCreateChunk(cx, cz);
+    chunk.blocks.set(blocks.slice(0, chunk.blocks.length));
+    this.rebuildChunkMesh(cx, cz);
+  }
+
+  dispose(): void {
+    for (const rec of this.records.values()) {
+      this.scene.remove(rec.group);
+      rec.meshData.dispose();
     }
-    this.chunks.clear();
+    this.records.clear();
+    this.buildQueue.length = 0;
+    this.queuedSet.clear();
   }
 }
+
+export { BlockId };
