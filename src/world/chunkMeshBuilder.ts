@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import {
   BlockId,
   CHUNK_SIZE_X,
-  CHUNK_SIZE_Y,
   CHUNK_SIZE_Z,
   WORLD_HEIGHT,
   getBlockDefinition,
@@ -147,6 +146,12 @@ function createBuffers(): MeshBuffers {
   };
 }
 
+function blockToneVariation(wx: number, wy: number, wz: number): number {
+  const h = Math.sin(wx * 12.9898 + wy * 78.233 + wz * 37.719) * 43758.5453;
+  const frac = h - Math.floor(h);
+  return 0.94 + frac * 0.12;
+}
+
 function vertexAoFactor(
   side1Solid: boolean,
   side2Solid: boolean,
@@ -226,7 +231,7 @@ export function buildChunkGeometries(
     return worldLookup.getBlockAt(baseX + lx, wy, baseZ + lz);
   };
 
-  for (let wy = 0; wy < CHUNK_SIZE_Y; wy++) {
+  for (let wy = 0; wy < WORLD_HEIGHT; wy++) {
     for (let lz = 0; lz < CHUNK_SIZE_Z; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE_X; lx++) {
         const blockId = getLocalOrWorld(lx, wy, lz);
@@ -237,6 +242,7 @@ export function buildChunkGeometries(
         const def = getBlockDefinition(blockId);
         const isTrans = isBlockTransparent(blockId);
         const target = isTrans ? transparent : opaque;
+        const tone = blockToneVariation(baseX + lx, wy, baseZ + lz);
 
         for (const face of FACE_DEFS) {
           const [dx, dy, dz] = face.dir;
@@ -264,6 +270,16 @@ export function buildChunkGeometries(
             [uvRect.u1, uvRect.v1],
             [uvRect.u0, uvRect.v1]
           ];
+
+          const faceColorHex =
+            face.faceKind === 'top'
+              ? def.colors.top
+              : face.faceKind === 'bottom'
+                ? def.colors.bottom
+                : def.colors.side;
+          const baseR = ((faceColorHex >> 16) & 255) / 255;
+          const baseG = ((faceColorHex >> 8) & 255) / 255;
+          const baseB = (faceColorHex & 255) / 255;
 
           const baseVertexIndex = target.positions.length / 3;
           const faceAo: number[] = [];
@@ -293,12 +309,8 @@ export function buildChunkGeometries(
             const ao = isTrans ? 1.0 : vertexAoFactor(s1Solid, s2Solid, crSolid);
             faceAo.push(ao);
 
-            const tint = def.tintHex;
-            const r = ((tint >> 16) & 255) / 255;
-            const g = ((tint >> 8) & 255) / 255;
-            const b = (tint & 255) / 255;
-
-            target.colors.push(r * ao, g * ao, b * ao);
+            const shade = ao * tone;
+            target.colors.push(baseR * shade, baseG * shade, baseB * shade);
 
             const animMeta = computeVertexAnimKindAndWeight(blockId, face.faceKind, cyOff);
             target.animKinds.push(animMeta.animKind);

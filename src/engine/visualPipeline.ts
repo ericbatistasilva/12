@@ -289,11 +289,11 @@ export function applyAnimatedMaterialShader(
         /* glsl */ `
         #include <beginnormal_vertex>
         float animWeightSafe = clamp(aAnimWeight, 0.0, 1.0);
-        if (aAnimKind > 0.5 && aAnimKind < 1.5 && animWeightSafe > 0.0001) {
+        // Perturba a normal PBR apenas na face superior da agua (normal local aprox. +Y)
+        if (aAnimKind > 0.5 && aAnimKind < 1.5 && objectNormal.y > 0.85 && animWeightSafe > 0.0001) {
           vec4 worldNormPos = modelMatrix * vec4(position, 1.0);
           float phase1 = worldNormPos.x * 0.65 + worldNormPos.z * 0.55 + uTime * uWaterSpeed;
           float phase2 = worldNormPos.x * 1.3 - worldNormPos.z * 1.1 + uTime * uWaterSpeed * 1.35;
-          // Derivadas parciais exatas de wave(x, z) = sin(phase1) + 0.5 * cos(phase2)
           float dWaveWorldDx = (0.65 * cos(phase1) - 0.65 * sin(phase2)) * uWaterAmp * animWeightSafe;
           float dWaveWorldDz = (0.55 * cos(phase1) + 0.55 * sin(phase2)) * uWaterAmp * animWeightSafe;
           vec3 perturbedWorldNormal = normalize(vec3(-dWaveWorldDx, 1.0, -dWaveWorldDz));

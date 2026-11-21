@@ -26,6 +26,12 @@ import {
   resolveEffectiveVisualFlags
 } from '../src/engine/visualPipeline.js';
 
+function setBlockInChunk(blocks: Uint8Array, lx: number, wy: number, lz: number, id: number): void {
+  assert.ok(wy >= 0 && wy < WORLD_HEIGHT, `wy out of bounds: ${wy}`);
+  const idx = wy * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx;
+  blocks[idx] = id;
+}
+
 test('1. deterministic procedural world generation and safe spawn', () => {
   const genA = new WorldGenerator('seed-alpha');
   const genB = new WorldGenerator('seed-alpha');
@@ -68,8 +74,7 @@ test('2. physics and block collision behavior', () => {
 
 test('3. block mining and placement raycast target resolution', () => {
   const blocks = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
-  const idx = 4 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 2 * CHUNK_SIZE_X + 2;
-  blocks[idx] = BlockId.STONE;
+  setBlockInChunk(blocks, 2, 4, 2, BlockId.STONE);
 
   const hit = raycastTargetBlock(
     new THREE.Vector3(2.5, 4.5, 5.0),
@@ -77,7 +82,7 @@ test('3. block mining and placement raycast target resolution', () => {
     8,
     (wx, wy, wz) => {
       if (wx >= 0 && wx < CHUNK_SIZE_X && wz >= 0 && wz < CHUNK_SIZE_Z && wy >= 0 && wy < WORLD_HEIGHT) {
-        return blocks[wy * CHUNK_SIZE_X * CHUNK_SIZE_Z + wz * CHUNK_SIZE_X + wx];
+        return blocks[wy * CHUNK_SIZE_X * CHUNK_SIZE_Z + wz * CHUNK_SIZE_X + wx] ?? BlockId.AIR;
       }
       return BlockId.AIR;
     }
@@ -87,6 +92,7 @@ test('3. block mining and placement raycast target resolution', () => {
   assert.deepEqual(hit.blockPos, { x: 2, y: 4, z: 2 });
   assert.deepEqual(hit.adjacentPos, { x: 2, y: 4, z: 3 });
 
+  const idx = 4 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 2 * CHUNK_SIZE_X + 2;
   blocks[idx] = BlockId.AIR;
   assert.equal(blocks[idx], BlockId.AIR);
   blocks[idx] = BlockId.PLANKS;
@@ -172,16 +178,16 @@ test('6. atlas UV rectangles are valid and differentiate top vs side faces', () 
   );
 });
 
-test('7. buildChunkGeometries produces aligned animation kind and weight attributes for water, leaves, glass, and opaque blocks', () => {
+test('7. buildChunkGeometries produces aligned animation kind and weight attributes across valid elevations', () => {
   const blocksLow = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
-  blocksLow[2 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 2 * CHUNK_SIZE_X + 2] = BlockId.GRASS;
-  blocksLow[3 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 3 * CHUNK_SIZE_X + 3] = BlockId.WATER;
-  blocksLow[5 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 4 * CHUNK_SIZE_X + 4] = BlockId.LEAVES;
-  blocksLow[5 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 6 * CHUNK_SIZE_X + 6] = BlockId.GLASS;
+  setBlockInChunk(blocksLow, 2, 2, 2, BlockId.GRASS);
+  setBlockInChunk(blocksLow, 3, 3, 3, BlockId.WATER);
+  setBlockInChunk(blocksLow, 4, 5, 4, BlockId.LEAVES);
+  setBlockInChunk(blocksLow, 6, 5, 6, BlockId.GLASS);
 
   const blocksHigh = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
-  blocksHigh[90 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 3 * CHUNK_SIZE_X + 3] = BlockId.WATER;
-  blocksHigh[92 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 4 * CHUNK_SIZE_X + 4] = BlockId.LEAVES;
+  setBlockInChunk(blocksHigh, 3, 40, 3, BlockId.WATER);
+  setBlockInChunk(blocksHigh, 4, 42, 4, BlockId.LEAVES);
 
   const emptyLookup = { getBlockAt: () => BlockId.AIR };
   const resLow = buildChunkGeometries(0, 0, blocksLow, emptyLookup);
@@ -192,10 +198,12 @@ test('7. buildChunkGeometries produces aligned animation kind and weight attribu
   assert.ok(resHigh.transparentGeometry !== null);
 
   const opPos = resLow.opaqueGeometry.getAttribute('position');
+  const opNorm = resLow.opaqueGeometry.getAttribute('normal');
   const opUv = resLow.opaqueGeometry.getAttribute('uv');
   const opColor = resLow.opaqueGeometry.getAttribute('color');
   const opKind = resLow.opaqueGeometry.getAttribute('aAnimKind');
   const opWeight = resLow.opaqueGeometry.getAttribute('aAnimWeight');
+  assert.equal(opNorm.count, opPos.count);
   assert.equal(opUv.count, opPos.count);
   assert.equal(opColor.count, opPos.count);
   assert.equal(opKind.count, opPos.count);
@@ -204,10 +212,12 @@ test('7. buildChunkGeometries produces aligned animation kind and weight attribu
   assert.ok(Array.from(opWeight.array as Float32Array).every((v) => v === 0));
 
   const trPos = resLow.transparentGeometry.getAttribute('position');
+  const trNorm = resLow.transparentGeometry.getAttribute('normal');
   const trUv = resLow.transparentGeometry.getAttribute('uv');
   const trColor = resLow.transparentGeometry.getAttribute('color');
   const trKind = resLow.transparentGeometry.getAttribute('aAnimKind');
   const trWeight = resLow.transparentGeometry.getAttribute('aAnimWeight');
+  assert.equal(trNorm.count, trPos.count);
   assert.equal(trUv.count, trPos.count);
   assert.equal(trColor.count, trPos.count);
   assert.equal(trKind.count, trPos.count);
@@ -224,7 +234,6 @@ test('7. buildChunkGeometries produces aligned animation kind and weight attribu
     Array.from(trHighWeight.array as Float32Array)
   );
 
-  // Leaf weight varies from base (0) to mid (0.5) to top (1)
   const leafBase = computeVertexAnimKindAndWeight(BlockId.LEAVES, 'side', 0);
   const leafMid = computeVertexAnimKindAndWeight(BlockId.LEAVES, 'side', 0.5);
   const leafTop = computeVertexAnimKindAndWeight(BlockId.LEAVES, 'top', 1);
@@ -233,7 +242,6 @@ test('7. buildChunkGeometries produces aligned animation kind and weight attribu
   assert.equal(leafMid.animWeight, 0.5);
   assert.equal(leafTop.animWeight, 1);
 
-  // Water weight is 1 on top/upper edge and 0 on lower edge/bottom
   const waterTop = computeVertexAnimKindAndWeight(BlockId.WATER, 'top', 1);
   const waterSideTop = computeVertexAnimKindAndWeight(BlockId.WATER, 'side', 1);
   const waterSideBottom = computeVertexAnimKindAndWeight(BlockId.WATER, 'side', 0);
@@ -243,7 +251,6 @@ test('7. buildChunkGeometries produces aligned animation kind and weight attribu
   assert.equal(waterSideBottom.animWeight, 0);
   assert.equal(waterBottom.animWeight, 0);
 
-  // Glass has no foliage or water animation
   const glassMeta = computeVertexAnimKindAndWeight(BlockId.GLASS, 'side', 1);
   assert.equal(glassMeta.animKind, 0);
   assert.equal(glassMeta.animWeight, 0);
@@ -267,11 +274,8 @@ test('8. quality presets and visual flag resolution preserve user shadow and fog
   assert.ok(perf.waterWaveAmplitude < bal.waterWaveAmplitude && bal.waterWaveAmplitude < ultra.waterWaveAmplitude);
   assert.ok(perf.foliageSwayAmplitude < bal.foliageSwayAmplitude && bal.foliageSwayAmplitude < ultra.foliageSwayAmplitude);
 
-  // Disabling shadows stays off even in Ultra
   assert.equal(resolveEffectiveVisualFlags({ shadows: false, fog: true }, ultra).shadowsEnabled, false);
-  // Disabling fog stays off even in Performance
   assert.equal(resolveEffectiveVisualFlags({ shadows: true, fog: false }, perf).fogEnabled, false);
-  // Enabling user shadows in Ultra allows shadows, while Performance still disables shadows via profile
   assert.equal(resolveEffectiveVisualFlags({ shadows: true, fog: true }, ultra).shadowsEnabled, true);
   assert.equal(resolveEffectiveVisualFlags({ shadows: true, fog: true }, perf).shadowsEnabled, false);
 
