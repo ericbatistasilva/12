@@ -148,6 +148,7 @@ interface MeshBuffers {
   normals: number[];
   colors: number[];
   uvs: number[];
+  animKinds: number[];
   indices: number[];
 }
 
@@ -157,6 +158,7 @@ function createMeshBuffers(): MeshBuffers {
     normals: [],
     colors: [],
     uvs: [],
+    animKinds: [],
     indices: []
   };
 }
@@ -202,6 +204,12 @@ function computeCornerAo(
   return Math.max(0.35, 1.0 - occ * 0.18);
 }
 
+function getBlockAnimKind(blockId: number): number {
+  if (blockId === BlockId.WATER) return 1.0;
+  if (blockId === BlockId.LEAVES) return 2.0;
+  return 0.0;
+}
+
 function pushQuad(
   buf: MeshBuffers,
   x: number,
@@ -214,6 +222,7 @@ function pushQuad(
   uv: UvRect,
   baseColor: THREE.Color,
   aoValues: [number, number, number, number],
+  animKind: number,
   yOffset = 0
 ): void {
   const baseIndex = buf.positions.length / 3;
@@ -235,6 +244,7 @@ function pushQuad(
       Math.min(1, baseColor.b * ao)
     );
     buf.uvs.push(quadUvs[i][0], quadUvs[i][1]);
+    buf.animKinds.push(animKind);
   }
 
   if (aoValues[0] + aoValues[2] > aoValues[1] + aoValues[3]) {
@@ -255,6 +265,7 @@ function finalizeGeometry(buf: MeshBuffers): THREE.BufferGeometry | null {
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(buf.normals, 3));
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(buf.colors, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uvs, 2));
+  geometry.setAttribute('aAnimKind', new THREE.Float32BufferAttribute(buf.animKinds, 1));
   geometry.setIndex(buf.indices);
   geometry.computeBoundingSphere();
   return geometry;
@@ -290,6 +301,7 @@ export function buildChunkGeometries(
         const def = getBlockDefinition(blockId);
         const isTransp = isTransparentBlock(blockId);
         const targetBuf = isTransp ? transparentBuf : opaqueBuf;
+        const animKind = getBlockAnimKind(blockId);
 
         for (const face of FACES) {
           const [nx, ny, nz] = face.dir;
@@ -345,6 +357,7 @@ export function buildChunkGeometries(
             uv,
             tempColor,
             ao,
+            animKind,
             yOffset
           );
         }

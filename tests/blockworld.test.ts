@@ -16,6 +16,7 @@ import { PlayerController } from '../src/player/playerController.js';
 import { WorldStorage } from '../src/persistence/worldStorage.js';
 import { getBlockFaceUvRect } from '../src/world/blockTextureAtlas.js';
 import { buildChunkGeometries } from '../src/world/chunkMeshBuilder.js';
+import { getQualityProfile, normalizeQualityPreset } from '../src/engine/visualPipeline.js';
 
 test('1. deterministic procedural world generation and safe spawn', () => {
   const genA = new WorldGenerator('seed-alpha');
@@ -163,30 +164,56 @@ test('6. atlas UV rectangles are valid and differentiate top vs side faces', () 
   );
 });
 
-test('7. buildChunkGeometries produces UV attributes matching vertex counts with Voxel AO', () => {
+test('7. buildChunkGeometries produces UV and animation attributes matching vertex counts with Voxel AO', () => {
   const blocks = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
   const idx = 4 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 2 * CHUNK_SIZE_X + 2;
   blocks[idx] = BlockId.GRASS;
+  const waterIdx = 3 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 3 * CHUNK_SIZE_X + 3;
+  blocks[waterIdx] = BlockId.WATER;
 
   const lookup = {
     getBlockAt(wx: number, wy: number, wz: number): number {
       if (wx === 2 && wy === 4 && wz === 2) return BlockId.GRASS;
+      if (wx === 3 && wy === 3 && wz === 3) return BlockId.WATER;
       return BlockId.AIR;
     }
   };
 
   const { opaqueGeometry, transparentGeometry } = buildChunkGeometries(0, 0, blocks, lookup);
 
-  assert.equal(transparentGeometry, null);
   assert.ok(opaqueGeometry !== null);
+  assert.ok(transparentGeometry !== null);
 
   const posAttr = opaqueGeometry.getAttribute('position');
   const uvAttr = opaqueGeometry.getAttribute('uv');
   const colorAttr = opaqueGeometry.getAttribute('color');
+  const animAttr = opaqueGeometry.getAttribute('aAnimKind');
 
   assert.ok(posAttr && posAttr.count > 0);
   assert.ok(uvAttr && uvAttr.count === posAttr.count);
   assert.ok(colorAttr && colorAttr.count === posAttr.count);
+  assert.ok(animAttr && animAttr.count === posAttr.count);
+
+  const transPosAttr = transparentGeometry.getAttribute('position');
+  const transAnimAttr = transparentGeometry.getAttribute('aAnimKind');
+  assert.ok(transPosAttr && transPosAttr.count > 0);
+  assert.ok(transAnimAttr && transAnimAttr.count === transPosAttr.count);
 
   opaqueGeometry.dispose();
+  transparentGeometry.dispose();
+});
+
+test('8. quality presets scale shadow resolution, pixel ratio cap, and motion/sky parameters', () => {
+  const perf = getQualityProfile(normalizeQualityPreset('performance'));
+  const bal = getQualityProfile(normalizeQualityPreset('balanced'));
+  const ultra = getQualityProfile(normalizeQualityPreset('ultra'));
+
+  assert.equal(perf.shadowEnabled, false);
+  assert.equal(bal.shadowEnabled, true);
+  assert.equal(ultra.shadowEnabled, true);
+
+  assert.ok(perf.pixelRatioCap < bal.pixelRatioCap && bal.pixelRatioCap < ultra.pixelRatioCap);
+  assert.ok(bal.shadowMapSize < ultra.shadowMapSize);
+  assert.ok(perf.waterWaveAmplitude < bal.waterWaveAmplitude && bal.waterWaveAmplitude < ultra.waterWaveAmplitude);
+  assert.ok(perf.foliageSwayAmplitude < bal.foliageSwayAmplitude && bal.foliageSwayAmplitude < ultra.foliageSwayAmplitude);
 });
