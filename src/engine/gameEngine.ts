@@ -31,12 +31,18 @@ export class GameEngine {
   private readonly uFoliageAmp = { value: 0.015 };
   private readonly uFoliageSpeed = { value: 1.45 };
   private activeQuality: QualityPreset = 'balanced';
+  private userShadowsEnabled = true;
+  private userFogEnabled = true;
 
   constructor(canvas: HTMLCanvasElement, initialSettings: GameSettings, atlasSeed = 1337) {
     this.canvas = canvas;
     const rawQuality = (initialSettings as GameSettings & { quality?: string }).quality;
     this.activeQuality = normalizeQualityPreset(rawQuality);
+    this.userShadowsEnabled = initialSettings.shadows ?? true;
+    this.userFogEnabled = initialSettings.fog ?? true;
     const profile = getQualityProfile(this.activeQuality);
+    const effectiveShadows = this.userShadowsEnabled && profile.shadowEnabled;
+    const effectiveFog = this.userFogEnabled && profile.fogEnabled;
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -44,13 +50,13 @@ export class GameEngine {
     this.renderer.toneMappingExposure = profile.toneMappingExposure;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, profile.pixelRatioCap));
     this.renderer.setSize(window.innerWidth || 800, window.innerHeight || 600, false);
-    this.renderer.shadowMap.enabled = profile.shadowEnabled;
+    this.renderer.shadowMap.enabled = effectiveShadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(profile.skyHorizonColor);
 
-    this.fog = new THREE.FogExp2(profile.skyHorizonColor, profile.fogEnabled ? profile.fogDensity : 0);
+    this.fog = new THREE.FogExp2(profile.skyHorizonColor, effectiveFog ? profile.fogDensity : 0);
     this.scene.fog = this.fog;
 
     const width = window.innerWidth || 800;
@@ -65,7 +71,7 @@ export class GameEngine {
 
     this.dirLight = new THREE.DirectionalLight(0xfffbeb, profile.dirLightIntensity);
     this.dirLight.position.set(28, 46, 22);
-    this.dirLight.castShadow = profile.shadowEnabled;
+    this.dirLight.castShadow = effectiveShadows;
     this.dirLight.shadow.mapSize.width = profile.shadowMapSize;
     this.dirLight.shadow.mapSize.height = profile.shadowMapSize;
     this.dirLight.shadow.radius = profile.shadowRadius;
@@ -107,7 +113,7 @@ export class GameEngine {
       this.uWaterSpeed,
       this.uFoliageAmp,
       this.uFoliageSpeed,
-      'blockworld-transparent-water-foliage-v1'
+      'blockworld-transparent-water-foliage-v2'
     );
 
     const boxGeom = new THREE.BoxGeometry(1.006, 1.006, 1.006);
@@ -131,6 +137,9 @@ export class GameEngine {
   }
 
   private applyProfile(profile: QualityProfile): void {
+    const effectiveShadows = this.userShadowsEnabled && profile.shadowEnabled;
+    const effectiveFog = this.userFogEnabled && profile.fogEnabled;
+
     this.uWaterAmp.value = profile.waterWaveAmplitude;
     this.uWaterSpeed.value = profile.waterWaveSpeed;
     this.uFoliageAmp.value = profile.foliageSwayAmplitude;
@@ -138,7 +147,7 @@ export class GameEngine {
 
     this.renderer.toneMappingExposure = profile.toneMappingExposure;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, profile.pixelRatioCap));
-    this.renderer.shadowMap.enabled = profile.shadowEnabled;
+    this.renderer.shadowMap.enabled = effectiveShadows;
 
     if (this.dirLight.shadow.mapSize.width !== profile.shadowMapSize) {
       this.dirLight.shadow.mapSize.width = profile.shadowMapSize;
@@ -149,13 +158,13 @@ export class GameEngine {
       }
     }
     this.dirLight.shadow.radius = profile.shadowRadius;
-    this.dirLight.castShadow = profile.shadowEnabled;
+    this.dirLight.castShadow = effectiveShadows;
     this.dirLight.intensity = profile.dirLightIntensity;
     this.hemiLight.intensity = profile.hemiIntensity;
 
     this.scene.background = new THREE.Color(profile.skyHorizonColor);
     this.fog.color.setHex(profile.skyHorizonColor);
-    this.fog.density = profile.fogEnabled ? profile.fogDensity : 0;
+    this.fog.density = effectiveFog ? profile.fogDensity : 0;
 
     this.skyDome.uniforms.uZenithColor.value.setHex(profile.skyZenithColor);
     this.skyDome.uniforms.uHorizonColor.value.setHex(profile.skyHorizonColor);
@@ -176,14 +185,18 @@ export class GameEngine {
     if (rawQuality !== undefined) {
       this.activeQuality = normalizeQualityPreset(rawQuality);
     }
+    if (typeof settings.shadows === 'boolean') {
+      this.userShadowsEnabled = settings.shadows;
+    }
+    if (typeof settings.fog === 'boolean') {
+      this.userFogEnabled = settings.fog;
+    }
+
     const profile = getQualityProfile(this.activeQuality);
     this.applyProfile(profile);
 
     this.camera.fov = settings.fov;
     this.camera.updateProjectionMatrix();
-    this.fog.density = settings.fog ? profile.fogDensity : 0;
-    this.renderer.shadowMap.enabled = settings.shadows && profile.shadowEnabled;
-    this.dirLight.castShadow = settings.shadows && profile.shadowEnabled;
   }
 
   updateTargetHighlight(target: TargetBlockHit | null): void {

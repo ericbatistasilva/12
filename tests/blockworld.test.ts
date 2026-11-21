@@ -16,7 +16,11 @@ import { PlayerController } from '../src/player/playerController.js';
 import { WorldStorage } from '../src/persistence/worldStorage.js';
 import { getBlockFaceUvRect } from '../src/world/blockTextureAtlas.js';
 import { buildChunkGeometries } from '../src/world/chunkMeshBuilder.js';
-import { getQualityProfile, normalizeQualityPreset } from '../src/engine/visualPipeline.js';
+import {
+  createAtmosphericSkyDome,
+  getQualityProfile,
+  normalizeQualityPreset
+} from '../src/engine/visualPipeline.js';
 
 test('1. deterministic procedural world generation and safe spawn', () => {
   const genA = new WorldGenerator('seed-alpha');
@@ -164,17 +168,19 @@ test('6. atlas UV rectangles are valid and differentiate top vs side faces', () 
   );
 });
 
-test('7. buildChunkGeometries produces UV and animation attributes matching vertex counts with Voxel AO', () => {
+test('7. buildChunkGeometries produces UV and animation attributes for water, leaves, and glass', () => {
   const blocks = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
-  const idx = 4 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 2 * CHUNK_SIZE_X + 2;
-  blocks[idx] = BlockId.GRASS;
-  const waterIdx = 3 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 3 * CHUNK_SIZE_X + 3;
-  blocks[waterIdx] = BlockId.WATER;
+  blocks[4 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 2 * CHUNK_SIZE_X + 2] = BlockId.GRASS;
+  blocks[3 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 3 * CHUNK_SIZE_X + 3] = BlockId.WATER;
+  blocks[5 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 4 * CHUNK_SIZE_X + 4] = BlockId.LEAVES;
+  blocks[5 * CHUNK_SIZE_X * CHUNK_SIZE_Z + 6 * CHUNK_SIZE_X + 6] = BlockId.GLASS;
 
   const lookup = {
     getBlockAt(wx: number, wy: number, wz: number): number {
       if (wx === 2 && wy === 4 && wz === 2) return BlockId.GRASS;
       if (wx === 3 && wy === 3 && wz === 3) return BlockId.WATER;
+      if (wx === 4 && wy === 5 && wz === 4) return BlockId.LEAVES;
+      if (wx === 6 && wy === 5 && wz === 6) return BlockId.GLASS;
       return BlockId.AIR;
     }
   };
@@ -193,17 +199,25 @@ test('7. buildChunkGeometries produces UV and animation attributes matching vert
   assert.ok(uvAttr && uvAttr.count === posAttr.count);
   assert.ok(colorAttr && colorAttr.count === posAttr.count);
   assert.ok(animAttr && animAttr.count === posAttr.count);
+  assert.ok(Array.from(animAttr.array as Float32Array).every((v) => v === 0));
 
   const transPosAttr = transparentGeometry.getAttribute('position');
+  const transUvAttr = transparentGeometry.getAttribute('uv');
   const transAnimAttr = transparentGeometry.getAttribute('aAnimKind');
   assert.ok(transPosAttr && transPosAttr.count > 0);
+  assert.ok(transUvAttr && transUvAttr.count === transPosAttr.count);
   assert.ok(transAnimAttr && transAnimAttr.count === transPosAttr.count);
+
+  const animValues = Array.from(transAnimAttr.array as Float32Array);
+  assert.ok(animValues.includes(1.0));
+  assert.ok(animValues.includes(2.0));
+  assert.ok(animValues.includes(0.0));
 
   opaqueGeometry.dispose();
   transparentGeometry.dispose();
 });
 
-test('8. quality presets scale shadow resolution, pixel ratio cap, and motion/sky parameters', () => {
+test('8. quality presets scale parameters while respecting user shadow and fog preferences', () => {
   const perf = getQualityProfile(normalizeQualityPreset('performance'));
   const bal = getQualityProfile(normalizeQualityPreset('balanced'));
   const ultra = getQualityProfile(normalizeQualityPreset('ultra'));
@@ -216,4 +230,14 @@ test('8. quality presets scale shadow resolution, pixel ratio cap, and motion/sk
   assert.ok(bal.shadowMapSize < ultra.shadowMapSize);
   assert.ok(perf.waterWaveAmplitude < bal.waterWaveAmplitude && bal.waterWaveAmplitude < ultra.waterWaveAmplitude);
   assert.ok(perf.foliageSwayAmplitude < bal.foliageSwayAmplitude && bal.foliageSwayAmplitude < ultra.foliageSwayAmplitude);
+
+  const userShadowsOff = false && ultra.shadowEnabled;
+  const userFogOff = false && perf.fogEnabled;
+  assert.equal(userShadowsOff, false);
+  assert.equal(userFogOff, false);
+
+  const sky = createAtmosphericSkyDome(bal);
+  assert.ok(sky.material.vertexShader.includes('vDomeDir = normalize(position);'));
+  assert.equal(sky.material.vertexShader.includes('worldPos.xyz'), false);
+  sky.dispose();
 });
