@@ -216,6 +216,7 @@ export function buildChunkGeometries(
 ): ChunkGeometries {
   const opaque = createBuffers();
   const transparent = createBuffers();
+  const faceColor = new THREE.Color();
 
   const baseX = cx * CHUNK_SIZE_X;
   const baseZ = cz * CHUNK_SIZE_Z;
@@ -271,15 +272,13 @@ export function buildChunkGeometries(
             [uvRect.u0, uvRect.v1]
           ];
 
-          const faceColorHex =
+          const faceHex =
             face.faceKind === 'top'
               ? def.colors.top
               : face.faceKind === 'bottom'
                 ? def.colors.bottom
                 : def.colors.side;
-          const baseR = ((faceColorHex >> 16) & 255) / 255;
-          const baseG = ((faceColorHex >> 8) & 255) / 255;
-          const baseB = (faceColorHex & 255) / 255;
+          faceColor.set(faceHex);
 
           const baseVertexIndex = target.positions.length / 3;
           const faceAo: number[] = [];
@@ -310,7 +309,7 @@ export function buildChunkGeometries(
             faceAo.push(ao);
 
             const shade = ao * tone;
-            target.colors.push(baseR * shade, baseG * shade, baseB * shade);
+            target.colors.push(faceColor.r * shade, faceColor.g * shade, faceColor.b * shade);
 
             const animMeta = computeVertexAnimKindAndWeight(blockId, face.faceKind, cyOff);
             target.animKinds.push(animMeta.animKind);

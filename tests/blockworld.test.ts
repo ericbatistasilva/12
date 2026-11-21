@@ -210,6 +210,7 @@ test('7. buildChunkGeometries produces aligned animation kind and weight attribu
   assert.equal(opWeight.count, opPos.count);
   assert.ok(Array.from(opKind.array as Float32Array).every((v) => v === 0));
   assert.ok(Array.from(opWeight.array as Float32Array).every((v) => v === 0));
+  assert.ok(Array.from(opColor.array as Float32Array).some((v) => v > 0));
 
   const trPos = resLow.transparentGeometry.getAttribute('position');
   const trNorm = resLow.transparentGeometry.getAttribute('normal');
@@ -222,6 +223,7 @@ test('7. buildChunkGeometries produces aligned animation kind and weight attribu
   assert.equal(trColor.count, trPos.count);
   assert.equal(trKind.count, trPos.count);
   assert.equal(trWeight.count, trPos.count);
+  assert.ok(Array.from(trColor.array as Float32Array).some((v) => v > 0));
 
   const trHighKind = resHigh.transparentGeometry.getAttribute('aAnimKind');
   const trHighWeight = resHigh.transparentGeometry.getAttribute('aAnimWeight');
