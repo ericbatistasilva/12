@@ -2,24 +2,16 @@ import * as THREE from 'three';
 import {
   BlockId,
   CHUNK_SIZE_X,
+  CHUNK_SIZE_Y,
   CHUNK_SIZE_Z,
   WORLD_HEIGHT,
   getBlockDefinition,
-  isBlockSolid
+  isBlockTransparent
 } from '../core/types.js';
-import { BlockFaceKind, getBlockFaceUvRect, UvRect } from './blockTextureAtlas.js';
+import { BlockFaceKind, getBlockFaceUvRect } from './blockTextureAtlas.js';
 
-export interface BlockLookup {
+export interface WorldBlockLookup {
   getBlockAt(wx: number, wy: number, wz: number): number;
-}
-
-export interface ChunkRecord {
-  cx: number;
-  cz: number;
-  blocks: Uint8Array;
-  opaqueMesh: THREE.Mesh | null;
-  transparentMesh: THREE.Mesh | null;
-  dirty: boolean;
 }
 
 export interface ChunkGeometries {
@@ -27,118 +19,108 @@ export interface ChunkGeometries {
   transparentGeometry: THREE.BufferGeometry | null;
 }
 
-interface FaceSpec {
+interface FaceDef {
   dir: [number, number, number];
   faceKind: BlockFaceKind;
-  aoWeights: [
-    [number, number, number],
-    [number, number, number],
-    [number, number, number],
-    [number, number, number]
-  ];
-  corners: [
-    [number, number, number],
-    [number, number, number],
-    [number, number, number],
-    [number, number, number]
-  ];
+  corners: ReadonlyArray<[number, number, number]>;
+  aoOffsets: ReadonlyArray<ReadonlyArray<[number, number, number]>>;
 }
 
-const FACES: FaceSpec[] = [
-  {
-    dir: [0, 1, 0],
-    faceKind: 'top',
-    aoWeights: [
-      [-1, 1, 1],
-      [1, 1, 1],
-      [1, 1, -1],
-      [-1, 1, -1]
-    ],
-    corners: [
-      [0, 1, 1],
-      [1, 1, 1],
-      [1, 1, 0],
-      [0, 1, 0]
-    ]
-  },
-  {
-    dir: [0, -1, 0],
-    faceKind: 'bottom',
-    aoWeights: [
-      [-1, -1, -1],
-      [1, -1, -1],
-      [1, -1, 1],
-      [-1, -1, 1]
-    ],
-    corners: [
-      [0, 0, 0],
-      [1, 0, 0],
-      [1, 0, 1],
-      [0, 0, 1]
-    ]
-  },
+const FACE_DEFS: ReadonlyArray<FaceDef> = [
   {
     dir: [1, 0, 0],
     faceKind: 'side',
-    aoWeights: [
-      [1, -1, 1],
-      [1, -1, -1],
-      [1, 1, -1],
-      [1, 1, 1]
-    ],
     corners: [
       [1, 0, 1],
       [1, 0, 0],
       [1, 1, 0],
       [1, 1, 1]
+    ],
+    aoOffsets: [
+      [[1, -1, 0], [1, 0, 1], [1, -1, 1]],
+      [[1, -1, 0], [1, 0, -1], [1, -1, -1]],
+      [[1, 1, 0], [1, 0, -1], [1, 1, -1]],
+      [[1, 1, 0], [1, 0, 1], [1, 1, 1]]
     ]
   },
   {
     dir: [-1, 0, 0],
     faceKind: 'side',
-    aoWeights: [
-      [-1, -1, -1],
-      [-1, -1, 1],
-      [-1, 1, 1],
-      [-1, 1, -1]
-    ],
     corners: [
       [0, 0, 0],
       [0, 0, 1],
       [0, 1, 1],
       [0, 1, 0]
+    ],
+    aoOffsets: [
+      [[-1, -1, 0], [-1, 0, -1], [-1, -1, -1]],
+      [[-1, -1, 0], [-1, 0, 1], [-1, -1, 1]],
+      [[-1, 1, 0], [-1, 0, 1], [-1, 1, 1]],
+      [[-1, 1, 0], [-1, 0, -1], [-1, 1, -1]]
+    ]
+  },
+  {
+    dir: [0, 1, 0],
+    faceKind: 'top',
+    corners: [
+      [0, 1, 1],
+      [1, 1, 1],
+      [1, 1, 0],
+      [0, 1, 0]
+    ],
+    aoOffsets: [
+      [[-1, 1, 0], [0, 1, 1], [-1, 1, 1]],
+      [[1, 1, 0], [0, 1, 1], [1, 1, 1]],
+      [[1, 1, 0], [0, 1, -1], [1, 1, -1]],
+      [[-1, 1, 0], [0, 1, -1], [-1, 1, -1]]
+    ]
+  },
+  {
+    dir: [0, -1, 0],
+    faceKind: 'bottom',
+    corners: [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 0, 1],
+      [0, 0, 1]
+    ],
+    aoOffsets: [
+      [[-1, -1, 0], [0, -1, -1], [-1, -1, -1]],
+      [[1, -1, 0], [0, -1, -1], [1, -1, -1]],
+      [[1, -1, 0], [0, -1, 1], [1, -1, 1]],
+      [[-1, -1, 0], [0, -1, 1], [-1, -1, 1]]
     ]
   },
   {
     dir: [0, 0, 1],
     faceKind: 'side',
-    aoWeights: [
-      [-1, -1, 1],
-      [1, -1, 1],
-      [1, 1, 1],
-      [-1, 1, 1]
-    ],
     corners: [
       [0, 0, 1],
       [1, 0, 1],
       [1, 1, 1],
       [0, 1, 1]
+    ],
+    aoOffsets: [
+      [[-1, 0, 1], [0, -1, 1], [-1, -1, 1]],
+      [[1, 0, 1], [0, -1, 1], [1, -1, 1]],
+      [[1, 0, 1], [0, 1, 1], [1, 1, 1]],
+      [[-1, 0, 1], [0, 1, 1], [-1, 1, 1]]
     ]
   },
   {
     dir: [0, 0, -1],
     faceKind: 'side',
-    aoWeights: [
-      [1, -1, -1],
-      [-1, -1, -1],
-      [-1, 1, -1],
-      [1, 1, -1]
-    ],
     corners: [
       [1, 0, 0],
       [0, 0, 0],
       [0, 1, 0],
       [1, 1, 0]
+    ],
+    aoOffsets: [
+      [[1, 0, -1], [0, -1, -1], [1, -1, -1]],
+      [[-1, 0, -1], [0, -1, -1], [-1, -1, -1]],
+      [[-1, 0, -1], [0, 1, -1], [-1, 1, -1]],
+      [[1, 0, -1], [0, 1, -1], [1, 1, -1]]
     ]
   }
 ];
@@ -146,227 +128,214 @@ const FACES: FaceSpec[] = [
 interface MeshBuffers {
   positions: number[];
   normals: number[];
-  colors: number[];
   uvs: number[];
+  colors: number[];
   animKinds: number[];
+  animWeights: number[];
   indices: number[];
 }
 
-function createMeshBuffers(): MeshBuffers {
+function createBuffers(): MeshBuffers {
   return {
     positions: [],
     normals: [],
-    colors: [],
     uvs: [],
+    colors: [],
     animKinds: [],
+    animWeights: [],
     indices: []
   };
 }
 
-function isOccluding(getBlockWorld: BlockLookup, wx: number, wy: number, wz: number): boolean {
-  const id = getBlockWorld.getBlockAt(wx, wy, wz);
-  if (id === BlockId.AIR || id === BlockId.WATER || id === BlockId.GLASS || id === BlockId.LEAVES) {
-    return false;
-  }
-  return isBlockSolid(id);
-}
-
-function computeCornerAo(
-  getBlockWorld: BlockLookup,
-  nx: number,
-  ny: number,
-  nz: number,
-  wx: number,
-  wy: number,
-  wz: number,
-  weight: [number, number, number]
+function vertexAoFactor(
+  side1Solid: boolean,
+  side2Solid: boolean,
+  cornerSolid: boolean
 ): number {
-  const [sx, sy, sz] = weight;
-  let side1 = false;
-  let side2 = false;
-  let corner = false;
-
-  if (ny !== 0) {
-    side1 = isOccluding(getBlockWorld, wx + sx, wy + ny, wz);
-    side2 = isOccluding(getBlockWorld, wx, wy + ny, wz + sz);
-    corner = isOccluding(getBlockWorld, wx + sx, wy + ny, wz + sz);
-  } else if (nx !== 0) {
-    side1 = isOccluding(getBlockWorld, wx + nx, wy + sy, wz);
-    side2 = isOccluding(getBlockWorld, wx + nx, wy, wz + sz);
-    corner = isOccluding(getBlockWorld, wx + nx, wy + sy, wz + sz);
-  } else {
-    side1 = isOccluding(getBlockWorld, wx + sx, wy, wz + nz);
-    side2 = isOccluding(getBlockWorld, wx, wy + sy, wz + nz);
-    corner = isOccluding(getBlockWorld, wx + sx, wy + sy, wz + nz);
-  }
-
-  const occ = side1 && side2 ? 3 : (side1 ? 1 : 0) + (side2 ? 1 : 0) + (corner ? 1 : 0);
-  return Math.max(0.35, 1.0 - occ * 0.18);
+  const occ = side1Solid && side2Solid ? 3 : (side1Solid ? 1 : 0) + (side2Solid ? 1 : 0) + (cornerSolid ? 1 : 0);
+  const factors = [1.0, 0.84, 0.68, 0.52];
+  return factors[occ] ?? 1.0;
 }
 
-function getBlockAnimKind(blockId: number): number {
-  if (blockId === BlockId.WATER) return 1.0;
-  if (blockId === BlockId.LEAVES) return 2.0;
-  return 0.0;
-}
-
-function pushQuad(
-  buf: MeshBuffers,
-  x: number,
-  y: number,
-  z: number,
-  nx: number,
-  ny: number,
-  nz: number,
-  corners: FaceSpec['corners'],
-  uv: UvRect,
-  baseColor: THREE.Color,
-  aoValues: [number, number, number, number],
-  animKind: number,
-  yOffset = 0
-): void {
-  const baseIndex = buf.positions.length / 3;
-  const quadUvs: [number, number][] = [
-    [uv.u0, uv.v0],
-    [uv.u1, uv.v0],
-    [uv.u1, uv.v1],
-    [uv.u0, uv.v1]
-  ];
-
-  for (let i = 0; i < 4; i++) {
-    const c = corners[i];
-    const ao = aoValues[i];
-    buf.positions.push(x + c[0], y + c[1] + yOffset, z + c[2]);
-    buf.normals.push(nx, ny, nz);
-    buf.colors.push(
-      Math.min(1, baseColor.r * ao),
-      Math.min(1, baseColor.g * ao),
-      Math.min(1, baseColor.b * ao)
-    );
-    buf.uvs.push(quadUvs[i][0], quadUvs[i][1]);
-    buf.animKinds.push(animKind);
+export function computeVertexAnimKindAndWeight(
+  blockId: number,
+  faceKind: BlockFaceKind,
+  localCornerY: number
+): { animKind: number; animWeight: number } {
+  if (blockId === BlockId.WATER) {
+    if (faceKind === 'top') {
+      return { animKind: 1.0, animWeight: 1.0 };
+    }
+    if (faceKind === 'side') {
+      return {
+        animKind: 1.0,
+        animWeight: localCornerY > 0.5 ? 1.0 : 0.0
+      };
+    }
+    return { animKind: 1.0, animWeight: 0.0 };
   }
 
-  if (aoValues[0] + aoValues[2] > aoValues[1] + aoValues[3]) {
-    buf.indices.push(baseIndex, baseIndex + 1, baseIndex + 2);
-    buf.indices.push(baseIndex, baseIndex + 2, baseIndex + 3);
-  } else {
-    buf.indices.push(baseIndex + 1, baseIndex + 2, baseIndex + 3);
-    buf.indices.push(baseIndex + 1, baseIndex + 3, baseIndex);
+  if (blockId === BlockId.LEAVES) {
+    const clampedY = Math.max(0, Math.min(1, localCornerY));
+    return {
+      animKind: 2.0,
+      animWeight: clampedY
+    };
   }
+
+  return { animKind: 0.0, animWeight: 0.0 };
 }
 
-function finalizeGeometry(buf: MeshBuffers): THREE.BufferGeometry | null {
-  if (buf.indices.length === 0) {
+function toBufferGeometry(buffers: MeshBuffers): THREE.BufferGeometry | null {
+  if (buffers.positions.length === 0 || buffers.indices.length === 0) {
     return null;
   }
+
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(buf.positions, 3));
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(buf.normals, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(buf.colors, 3));
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uvs, 2));
-  geometry.setAttribute('aAnimKind', new THREE.Float32BufferAttribute(buf.animKinds, 1));
-  geometry.setIndex(buf.indices);
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(buffers.positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(buffers.normals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(buffers.uvs, 2));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(buffers.colors, 3));
+  geometry.setAttribute('aAnimKind', new THREE.Float32BufferAttribute(buffers.animKinds, 1));
+  geometry.setAttribute('aAnimWeight', new THREE.Float32BufferAttribute(buffers.animWeights, 1));
+  geometry.setIndex(buffers.indices);
   geometry.computeBoundingSphere();
   return geometry;
-}
-
-function isTransparentBlock(blockId: number): boolean {
-  return blockId === BlockId.WATER || blockId === BlockId.GLASS || blockId === BlockId.LEAVES;
 }
 
 export function buildChunkGeometries(
   cx: number,
   cz: number,
   blocks: Uint8Array,
-  getBlockWorld: BlockLookup
+  worldLookup: WorldBlockLookup
 ): ChunkGeometries {
-  const opaqueBuf = createMeshBuffers();
-  const transparentBuf = createMeshBuffers();
-  const originX = cx * CHUNK_SIZE_X;
-  const originZ = cz * CHUNK_SIZE_Z;
-  const tempColor = new THREE.Color();
+  const opaque = createBuffers();
+  const transparent = createBuffers();
 
-  for (let y = 0; y < WORLD_HEIGHT; y++) {
-    for (let z = 0; z < CHUNK_SIZE_Z; z++) {
-      const wz = originZ + z;
-      for (let x = 0; x < CHUNK_SIZE_X; x++) {
-        const idx = y * CHUNK_SIZE_X * CHUNK_SIZE_Z + z * CHUNK_SIZE_X + x;
-        const blockId = blocks[idx];
+  const baseX = cx * CHUNK_SIZE_X;
+  const baseZ = cz * CHUNK_SIZE_Z;
+
+  const getLocalOrWorld = (lx: number, wy: number, lz: number): number => {
+    if (wy < 0 || wy >= WORLD_HEIGHT) {
+      return BlockId.AIR;
+    }
+    if (lx >= 0 && lx < CHUNK_SIZE_X && lz >= 0 && lz < CHUNK_SIZE_Z) {
+      const idx = wy * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx;
+      return blocks[idx] ?? BlockId.AIR;
+    }
+    return worldLookup.getBlockAt(baseX + lx, wy, baseZ + lz);
+  };
+
+  for (let wy = 0; wy < CHUNK_SIZE_Y; wy++) {
+    for (let lz = 0; lz < CHUNK_SIZE_Z; lz++) {
+      for (let lx = 0; lx < CHUNK_SIZE_X; lx++) {
+        const blockId = getLocalOrWorld(lx, wy, lz);
         if (blockId === BlockId.AIR) {
           continue;
         }
 
-        const wx = originX + x;
         const def = getBlockDefinition(blockId);
-        const isTransp = isTransparentBlock(blockId);
-        const targetBuf = isTransp ? transparentBuf : opaqueBuf;
-        const animKind = getBlockAnimKind(blockId);
+        const isTrans = isBlockTransparent(blockId);
+        const target = isTrans ? transparent : opaque;
 
-        for (const face of FACES) {
-          const [nx, ny, nz] = face.dir;
-          const neighborId = getBlockWorld.getBlockAt(wx + nx, y + ny, wz + nz);
+        for (const face of FACE_DEFS) {
+          const [dx, dy, dz] = face.dir;
+          const neighborId = getLocalOrWorld(lx + dx, wy + dy, lz + dz);
 
-          if (isTransp) {
+          if (neighborId === BlockId.AIR) {
+            // render face
+          } else if (isTrans) {
             if (neighborId === blockId) {
               continue;
             }
-            if (blockId === BlockId.WATER && isBlockSolid(neighborId)) {
+            if (!isBlockTransparent(neighborId) && getBlockDefinition(neighborId).solid) {
               continue;
             }
-            if (blockId !== BlockId.WATER && isBlockSolid(neighborId) && !isTransparentBlock(neighborId)) {
+          } else {
+            if (!isBlockTransparent(neighborId) && getBlockDefinition(neighborId).solid) {
               continue;
             }
-          } else if (isBlockSolid(neighborId) && !isTransparentBlock(neighborId)) {
-            continue;
           }
 
-          const uv = getBlockFaceUvRect(blockId, face.faceKind);
-          const hex =
-            face.faceKind === 'top'
-              ? def.colors.top
-              : face.faceKind === 'bottom'
-                ? def.colors.bottom
-                : def.colors.side;
-          tempColor.set(hex);
+          const uvRect = getBlockFaceUvRect(blockId, face.faceKind);
+          const cornerUvs: ReadonlyArray<[number, number]> = [
+            [uvRect.u0, uvRect.v0],
+            [uvRect.u1, uvRect.v0],
+            [uvRect.u1, uvRect.v1],
+            [uvRect.u0, uvRect.v1]
+          ];
 
-          const hash = Math.abs(Math.sin(wx * 12.9898 + y * 78.233 + wz * 37.719));
-          const tonalScale = 0.95 + (hash % 0.1);
-          tempColor.multiplyScalar(tonalScale);
+          const baseVertexIndex = target.positions.length / 3;
+          const faceAo: number[] = [];
 
-          const ao: [number, number, number, number] = isTransp
-            ? [1, 1, 1, 1]
-            : [
-                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[0]),
-                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[1]),
-                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[2]),
-                computeCornerAo(getBlockWorld, nx, ny, nz, wx, y, wz, face.aoWeights[3])
-              ];
+          for (let c = 0; c < 4; c++) {
+            const corner = face.corners[c] ?? [0, 0, 0];
+            const [cxOff, cyOff, czOff] = corner;
+            const wx = baseX + lx + cxOff;
+            const wyPos = wy + cyOff;
+            const wz = baseZ + lz + czOff;
 
-          const yOffset = blockId === BlockId.WATER && face.faceKind === 'top' ? -0.1 : 0;
+            target.positions.push(wx, wyPos, wz);
+            target.normals.push(dx, dy, dz);
 
-          pushQuad(
-            targetBuf,
-            wx,
-            y,
-            wz,
-            nx,
-            ny,
-            nz,
-            face.corners,
-            uv,
-            tempColor,
-            ao,
-            animKind,
-            yOffset
-          );
+            const uv = cornerUvs[c] ?? [0, 0];
+            target.uvs.push(uv[0], uv[1]);
+
+            const aoGroup = face.aoOffsets[c] ?? [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+            const s1Id = getLocalOrWorld(lx + aoGroup[0][0], wy + aoGroup[0][1], lz + aoGroup[0][2]);
+            const s2Id = getLocalOrWorld(lx + aoGroup[1][0], wy + aoGroup[1][1], lz + aoGroup[1][2]);
+            const crId = getLocalOrWorld(lx + aoGroup[2][0], wy + aoGroup[2][1], lz + aoGroup[2][2]);
+
+            const s1Solid = s1Id !== BlockId.AIR && !isBlockTransparent(s1Id) && getBlockDefinition(s1Id).solid;
+            const s2Solid = s2Id !== BlockId.AIR && !isBlockTransparent(s2Id) && getBlockDefinition(s2Id).solid;
+            const crSolid = crId !== BlockId.AIR && !isBlockTransparent(crId) && getBlockDefinition(crId).solid;
+
+            const ao = isTrans ? 1.0 : vertexAoFactor(s1Solid, s2Solid, crSolid);
+            faceAo.push(ao);
+
+            const tint = def.tintHex;
+            const r = ((tint >> 16) & 255) / 255;
+            const g = ((tint >> 8) & 255) / 255;
+            const b = (tint & 255) / 255;
+
+            target.colors.push(r * ao, g * ao, b * ao);
+
+            const animMeta = computeVertexAnimKindAndWeight(blockId, face.faceKind, cyOff);
+            target.animKinds.push(animMeta.animKind);
+            target.animWeights.push(animMeta.animWeight);
+          }
+
+          const ao0 = faceAo[0] ?? 1;
+          const ao1 = faceAo[1] ?? 1;
+          const ao2 = faceAo[2] ?? 1;
+          const ao3 = faceAo[3] ?? 1;
+
+          if (ao0 + ao2 >= ao1 + ao3) {
+            target.indices.push(
+              baseVertexIndex,
+              baseVertexIndex + 1,
+              baseVertexIndex + 2,
+              baseVertexIndex,
+              baseVertexIndex + 2,
+              baseVertexIndex + 3
+            );
+          } else {
+            target.indices.push(
+              baseVertexIndex + 1,
+              baseVertexIndex + 2,
+              baseVertexIndex + 3,
+              baseVertexIndex + 1,
+              baseVertexIndex + 3,
+              baseVertexIndex
+            );
+          }
         }
       }
     }
   }
 
   return {
-    opaqueGeometry: finalizeGeometry(opaqueBuf),
-    transparentGeometry: finalizeGeometry(transparentBuf)
+    opaqueGeometry: toBufferGeometry(opaque),
+    transparentGeometry: toBufferGeometry(transparent)
   };
 }

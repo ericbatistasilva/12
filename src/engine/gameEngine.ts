@@ -9,7 +9,8 @@ import {
   applyAnimatedMaterialShader,
   createAtmosphericSkyDome,
   getQualityProfile,
-  normalizeQualityPreset
+  normalizeQualityPreset,
+  resolveEffectiveVisualFlags
 } from './visualPipeline.js';
 
 export class GameEngine {
@@ -41,8 +42,10 @@ export class GameEngine {
     this.userShadowsEnabled = initialSettings.shadows ?? true;
     this.userFogEnabled = initialSettings.fog ?? true;
     const profile = getQualityProfile(this.activeQuality);
-    const effectiveShadows = this.userShadowsEnabled && profile.shadowEnabled;
-    const effectiveFog = this.userFogEnabled && profile.fogEnabled;
+    const effective = resolveEffectiveVisualFlags(
+      { shadows: this.userShadowsEnabled, fog: this.userFogEnabled },
+      profile
+    );
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -50,13 +53,13 @@ export class GameEngine {
     this.renderer.toneMappingExposure = profile.toneMappingExposure;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, profile.pixelRatioCap));
     this.renderer.setSize(window.innerWidth || 800, window.innerHeight || 600, false);
-    this.renderer.shadowMap.enabled = effectiveShadows;
+    this.renderer.shadowMap.enabled = effective.shadowsEnabled;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(profile.skyHorizonColor);
 
-    this.fog = new THREE.FogExp2(profile.skyHorizonColor, effectiveFog ? profile.fogDensity : 0);
+    this.fog = new THREE.FogExp2(profile.skyHorizonColor, effective.fogEnabled ? profile.fogDensity : 0);
     this.scene.fog = this.fog;
 
     const width = window.innerWidth || 800;
@@ -71,7 +74,7 @@ export class GameEngine {
 
     this.dirLight = new THREE.DirectionalLight(0xfffbeb, profile.dirLightIntensity);
     this.dirLight.position.set(28, 46, 22);
-    this.dirLight.castShadow = effectiveShadows;
+    this.dirLight.castShadow = effective.shadowsEnabled;
     this.dirLight.shadow.mapSize.width = profile.shadowMapSize;
     this.dirLight.shadow.mapSize.height = profile.shadowMapSize;
     this.dirLight.shadow.radius = profile.shadowRadius;
@@ -113,7 +116,7 @@ export class GameEngine {
       this.uWaterSpeed,
       this.uFoliageAmp,
       this.uFoliageSpeed,
-      'blockworld-transparent-water-foliage-v2'
+      'blockworld-transparent-water-foliage-v3'
     );
 
     const boxGeom = new THREE.BoxGeometry(1.006, 1.006, 1.006);
@@ -137,8 +140,10 @@ export class GameEngine {
   }
 
   private applyProfile(profile: QualityProfile): void {
-    const effectiveShadows = this.userShadowsEnabled && profile.shadowEnabled;
-    const effectiveFog = this.userFogEnabled && profile.fogEnabled;
+    const effective = resolveEffectiveVisualFlags(
+      { shadows: this.userShadowsEnabled, fog: this.userFogEnabled },
+      profile
+    );
 
     this.uWaterAmp.value = profile.waterWaveAmplitude;
     this.uWaterSpeed.value = profile.waterWaveSpeed;
@@ -147,7 +152,7 @@ export class GameEngine {
 
     this.renderer.toneMappingExposure = profile.toneMappingExposure;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, profile.pixelRatioCap));
-    this.renderer.shadowMap.enabled = effectiveShadows;
+    this.renderer.shadowMap.enabled = effective.shadowsEnabled;
 
     if (this.dirLight.shadow.mapSize.width !== profile.shadowMapSize) {
       this.dirLight.shadow.mapSize.width = profile.shadowMapSize;
@@ -158,13 +163,13 @@ export class GameEngine {
       }
     }
     this.dirLight.shadow.radius = profile.shadowRadius;
-    this.dirLight.castShadow = effectiveShadows;
+    this.dirLight.castShadow = effective.shadowsEnabled;
     this.dirLight.intensity = profile.dirLightIntensity;
     this.hemiLight.intensity = profile.hemiIntensity;
 
     this.scene.background = new THREE.Color(profile.skyHorizonColor);
     this.fog.color.setHex(profile.skyHorizonColor);
-    this.fog.density = effectiveFog ? profile.fogDensity : 0;
+    this.fog.density = effective.fogEnabled ? profile.fogDensity : 0;
 
     this.skyDome.uniforms.uZenithColor.value.setHex(profile.skyZenithColor);
     this.skyDome.uniforms.uHorizonColor.value.setHex(profile.skyHorizonColor);

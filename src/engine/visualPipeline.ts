@@ -27,6 +27,16 @@ export interface QualityProfile {
   sunDiscIntensity: number;
 }
 
+export interface VisualPreferenceInput {
+  shadows?: boolean;
+  fog?: boolean;
+}
+
+export interface EffectiveVisualFlags {
+  shadowsEnabled: boolean;
+  fogEnabled: boolean;
+}
+
 export function normalizeQualityPreset(raw?: string | null): QualityPreset {
   if (raw === 'performance' || raw === 'balanced' || raw === 'ultra') {
     return raw;
@@ -115,6 +125,18 @@ export function getQualityProfile(preset: QualityPreset): QualityProfile {
   }
 }
 
+export function resolveEffectiveVisualFlags(
+  preferences: VisualPreferenceInput,
+  profile: QualityProfile
+): EffectiveVisualFlags {
+  const userShadows = preferences.shadows ?? true;
+  const userFog = preferences.fog ?? true;
+  return {
+    shadowsEnabled: userShadows && profile.shadowEnabled,
+    fogEnabled: userFog && profile.fogEnabled
+  };
+}
+
 export interface SkyDomeRig {
   mesh: THREE.Mesh;
   material: THREE.ShaderMaterial;
@@ -146,7 +168,7 @@ export function createAtmosphericSkyDome(profile: QualityProfile): SkyDomeRig {
     vertexShader: /* glsl */ `
       varying vec3 vDomeDir;
       void main() {
-        // Direção relativa ao centro local do domo, independente da translação do mesh
+        // Direcao relativa ao centro local do domo, sem incorporar a translacao do mesh
         vDomeDir = normalize(position);
         vec4 worldPos = modelMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * viewMatrix * worldPos;
@@ -256,7 +278,9 @@ export function applyAnimatedMaterialShader(
         uniform float uFoliageAmp;
         uniform float uFoliageSpeed;
         attribute float aAnimKind;
+        attribute float aAnimWeight;
         varying float vAnimKind;
+        varying float vAnimWeight;
         varying vec3 vWorldPosAnim;
         `
       )
@@ -264,15 +288,22 @@ export function applyAnimatedMaterialShader(
         '#include <beginnormal_vertex>',
         /* glsl */ `
         #include <beginnormal_vertex>
-        if (aAnimKind > 0.5 && aAnimKind < 1.5) {
-          vec4 worldNormBase = modelMatrix * vec4(position, 1.0);
-          float phase1 = worldNormBase.x * 0.65 + worldNormBase.z * 0.55 + uTime * uWaterSpeed;
-          float phase2 = worldNormBase.x * 1.3 - worldNormBase.z * 1.1 + uTime * uWaterSpeed * 1.35;
-          float dWaveDx = (0.65 * cos(phase1) - 0.65 * sin(phase2)) * uWaterAmp * 2.2;
-          float dWaveDz = (0.55 * cos(phase1) + 0.55 * sin(phase2)) * uWaterAmp * 2.2;
-          vec3 perturbedWorldNormal = normalize(vec3(-dWaveDx, 1.0, -dWaveDz));
-          vec3 perturbedLocalNormal = normalize((inverse(mat3(modelMatrix)) * perturbedWorldNormal));
-          objectNormal = normalize(mix(objectNormal, perturbedLocalNormal, 0.75));
+        float animWeightSafe = clamp(aAnimWeight, 0.0, 1.0);
+        if (aAnimKind > 0.5 && aAnimKind < 1.5 && animWeightSafe > 0.0001) {
+          vec4 worldNormPos = modelMatrix * vec4(position, 1.0);
+          float phase1 = worldNormPos.x * 0.65 + worldNormPos.z * 0.55 + uTime * uWaterSpeed;
+          float phase2 = worldNormPos.x * 1.3 - worldNormPos.z * 1.1 + uTime * uWaterSpeed * 1.35;
+          // Derivadas parciais exatas de wave(x, z) = sin(phase1) + 0.5 * cos(phase2)
+          float dWaveWorldDx = (0.65 * cos(phase1) - 0.65 * sin(phase2)) * uWaterAmp * animWeightSafe;
+          float dWaveWorldDz = (0.55 * cos(phase1) + 0.55 * sin(phase2)) * uWaterAmp * animWeightSafe;
+          vec3 perturbedWorldNormal = normalize(vec3(-dWaveWorldDx, 1.0, -dWaveWorldDz));
+          mat3 worldToLocal = mat3(
+            normalize(modelMatrix[0].xyz),
+            normalize(modelMatrix[1].xyz),
+            normalize(modelMatrix[2].xyz)
+          );
+          vec3 perturbedLocalNormal = normalize(transpose(worldToLocal) * perturbedWorldNormal);
+          objectNormal = normalize(mix(objectNormal, perturbedLocalNormal, animWeightSafe));
         }
         `
       )
@@ -281,18 +312,16 @@ export function applyAnimatedMaterialShader(
         /* glsl */ `
         #include <begin_vertex>
         vAnimKind = aAnimKind;
+        vAnimWeight = clamp(aAnimWeight, 0.0, 1.0);
         vec4 worldBase = modelMatrix * vec4(transformed, 1.0);
         if (aAnimKind > 0.5 && aAnimKind < 1.5) {
-          float topMask = smoothstep(0.25, 0.95, position.y);
           float wave = sin(worldBase.x * 0.65 + worldBase.z * 0.55 + uTime * uWaterSpeed)
                      + 0.5 * cos(worldBase.x * 1.3 - worldBase.z * 1.1 + uTime * uWaterSpeed * 1.35);
-          transformed.y += wave * uWaterAmp * topMask;
+          transformed.y += wave * uWaterAmp * vAnimWeight;
         } else if (aAnimKind > 1.5) {
-          float localY = clamp(position.y - floor(position.y + 0.001), 0.0, 1.0);
-          float swayWeight = 0.35 + 0.65 * localY;
           float sway = sin(worldBase.x * 0.9 + worldBase.y * 1.4 + worldBase.z * 0.7 + uTime * uFoliageSpeed);
-          transformed.x += sway * uFoliageAmp * swayWeight;
-          transformed.z += cos(worldBase.z * 0.85 + worldBase.y * 1.2 + worldBase.x * 0.6 + uTime * uFoliageSpeed * 0.9) * uFoliageAmp * 0.7 * swayWeight;
+          transformed.x += sway * uFoliageAmp * vAnimWeight;
+          transformed.z += cos(worldBase.z * 0.85 + worldBase.y * 1.2 + worldBase.x * 0.6 + uTime * uFoliageSpeed * 0.9) * uFoliageAmp * 0.7 * vAnimWeight;
         }
         vWorldPosAnim = (modelMatrix * vec4(transformed, 1.0)).xyz;
         `
@@ -306,22 +335,23 @@ export function applyAnimatedMaterialShader(
         uniform float uTime;
         uniform float uWaterSpeed;
         varying float vAnimKind;
+        varying float vAnimWeight;
         varying vec3 vWorldPosAnim;
         `
       )
       .replace(
         '#include <dithering_fragment>',
         /* glsl */ `
-        if (vAnimKind > 0.5 && vAnimKind < 1.5) {
+        if (vAnimKind > 0.5 && vAnimKind < 1.5 && vAnimWeight > 0.0001) {
           vec3 viewDirW = normalize(cameraPosition - vWorldPosAnim);
           vec3 upN = normalize(vec3(
-            sin(vWorldPosAnim.x * 1.7 + uTime * uWaterSpeed * 1.4) * 0.08,
+            sin(vWorldPosAnim.x * 1.7 + uTime * uWaterSpeed * 1.4) * 0.08 * vAnimWeight,
             1.0,
-            cos(vWorldPosAnim.z * 1.6 + uTime * uWaterSpeed * 1.2) * 0.08
+            cos(vWorldPosAnim.z * 1.6 + uTime * uWaterSpeed * 1.2) * 0.08 * vAnimWeight
           ));
           float fresnel = pow(1.0 - max(dot(viewDirW, upN), 0.0), 3.2);
           float shimmer = smoothstep(0.68, 0.94, sin(vWorldPosAnim.x * 3.1 + vWorldPosAnim.z * 2.7 - uTime * uWaterSpeed * 2.0) * 0.5 + 0.5);
-          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb + vec3(0.24, 0.34, 0.42), clamp(fresnel * 0.55 + shimmer * 0.14, 0.0, 0.65));
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb + vec3(0.24, 0.34, 0.42), clamp((fresnel * 0.55 + shimmer * 0.14) * vAnimWeight, 0.0, 0.65));
         }
         #include <dithering_fragment>
         `
