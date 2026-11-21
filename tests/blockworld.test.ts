@@ -9,11 +9,13 @@ import {
   getBlockDefinition,
   isBlockSolid
 } from '../src/core/types.js';
-import { GameStateManager } from '../src/core/gameState.js';
+import { DEFAULT_GAME_SETTINGS, SavedWorldData } from '../src/core/gameState.js';
 import { WorldGenerator } from '../src/world/worldGenerator.js';
 import { raycastBlocks } from '../src/building/blockInteraction.js';
 import { PlayerController } from '../src/player/playerController.js';
 import { WorldStorage } from '../src/persistence/worldStorage.js';
+import { InventoryManager } from '../src/inventory/inventoryManager.js';
+import { blockIntersectsAABB, collidesWithWorld, createPlayerAABB } from '../src/physics/collision.js';
 import { getBlockFaceUvRect } from '../src/world/blockTextureAtlas.js';
 import {
   buildChunkGeometries,
@@ -32,64 +34,90 @@ function setBlockInChunk(blocks: Uint8Array, lx: number, wy: number, lz: number,
   blocks[idx] = id;
 }
 
+function getBlockFromChunk(blocks: Uint8Array, wx: number, wy: number, wz: number): number {
+  const lx = ((wx % CHUNK_SIZE_X) + CHUNK_SIZE_X) % CHUNK_SIZE_X;
+  const lz = ((wz % CHUNK_SIZE_Z) + CHUNK_SIZE_Z) % CHUNK_SIZE_Z;
+  if (wy < 0 || wy >= WORLD_HEIGHT) {
+    return BlockId.AIR;
+  }
+  return blocks[wy * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx] ?? BlockId.AIR;
+}
+
 test('1. deterministic procedural world generation and safe spawn', () => {
   const genA = new WorldGenerator('seed-alpha');
   const genB = new WorldGenerator('seed-alpha');
   const genC = new WorldGenerator('seed-beta');
 
-  const chunkA = genA.generateChunk(0, 0);
-  const chunkB = genB.generateChunk(0, 0);
-  const chunkC = genC.generateChunk(0, 0);
+  const chunkA = genA.generateChunkBlocks(0, 0);
+  const chunkB = genB.generateChunkBlocks(0, 0);
+  const chunkC = genC.generateChunkBlocks(0, 0);
 
   assert.deepEqual(Array.from(chunkA), Array.from(chunkB));
   assert.notDeepEqual(Array.from(chunkA), Array.from(chunkC));
 
-  const spawn = genA.findSafeSpawnPosition(0, 0);
+  const colA = genA.sampleColumn(4, 4);
+  const colB = genB.sampleColumn(4, 4);
+  assert.equal(colA.height, colB.height);
+  assert.equal(colA.biome, colB.biome);
+
+  const spawn = genA.findSafeSpawn(0, 0);
   assert.ok(spawn.y > 0);
-  assert.equal(
-    isBlockSolid(genA.getBlockAt(Math.floor(spawn.x), Math.floor(spawn.y - 1.1), Math.floor(spawn.z))),
-    true
+  const supportBlock = getBlockFromChunk(
+    chunkA,
+    Math.floor(spawn.x),
+    Math.floor(spawn.y - 1.1),
+    Math.floor(spawn.z)
   );
+  assert.equal(isBlockSolid(supportBlock), true);
 });
 
 test('2. physics and block collision behavior', () => {
-  const manager = new GameStateManager();
-  const state = manager.getState();
-  const camera = new THREE.PerspectiveCamera(state.settings.fov, 1.5, 0.1, 180);
+  const camera = new THREE.PerspectiveCamera(DEFAULT_GAME_SETTINGS.fov, 1.5, 0.1, 180);
   const solidBlocks = new Map<string, number>();
   solidBlocks.set('0,4,0', BlockId.STONE);
 
-  const player = new PlayerController(
-    camera,
-    state.settings,
-    (wx: number, wy: number, wz: number): number => solidBlocks.get(`${wx},${wy},${wz}`) ?? BlockId.AIR
-  );
-  player.position.set(0.5, 5.01, 0.5);
-  player.velocity.y = -4;
+  const world = {
+    isSolidAt(x: number, y: number, z: number): boolean {
+      const id = solidBlocks.get(`${x},${y},${z}`) ?? BlockId.AIR;
+      return isBlockSolid(id);
+    }
+  };
 
-  player.update(0.05, {});
-  assert.equal(player.onGround, true);
-  assert.equal(player.intersectsBlock(0, 4, 0), true);
-  assert.equal(player.intersectsBlock(3, 10, 3), false);
+  const player = new PlayerController({ x: 0.5, y: 5.02, z: 0.5 }, 0, 0);
+  player.velocity.y = -3;
+
+  for (let i = 0; i < 15; i++) {
+    player.update(0.05, world, camera);
+  }
+
+  assert.ok(player.position.y >= 4.99);
+  assert.equal(player.grounded, true);
+
+  const playerBox = createPlayerAABB(player.position);
+  assert.equal(blockIntersectsAABB(0, 4, 0, playerBox), true);
+  assert.equal(blockIntersectsAABB(3, 10, 3, playerBox), false);
+  assert.equal(collidesWithWorld(playerBox, world), true);
 });
 
 test('3. block mining and placement raycast target resolution', () => {
   const blocks = new Uint8Array(CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
   setBlockInChunk(blocks, 2, 4, 2, BlockId.STONE);
 
-  const origin = new THREE.Vector3(2.5, 4.5, 5.0);
-  const direction = new THREE.Vector3(0, 0, -1);
-
-  const hit = raycastBlocks(
-    origin,
-    direction,
-    8,
-    (wx: number, wy: number, wz: number): number => {
+  const world = {
+    getBlockAt(wx: number, wy: number, wz: number): number {
       if (wx >= 0 && wx < CHUNK_SIZE_X && wz >= 0 && wz < CHUNK_SIZE_Z && wy >= 0 && wy < WORLD_HEIGHT) {
         return blocks[wy * CHUNK_SIZE_X * CHUNK_SIZE_Z + wz * CHUNK_SIZE_X + wx] ?? BlockId.AIR;
       }
       return BlockId.AIR;
     }
+  };
+
+  const hit = raycastBlocks(
+    new THREE.Vector3(2.5, 4.5, 5.0),
+    new THREE.Vector3(0, 0, -1),
+    world,
+    8,
+    0.05
   );
 
   assert.ok(hit !== null);
@@ -104,19 +132,26 @@ test('3. block mining and placement raycast target resolution', () => {
 });
 
 test('4. inventory slots, hotbar selection, and block definitions', () => {
-  const manager = new GameStateManager();
-  const state = manager.getState();
-  assert.ok(state.hotbar.length > 0);
+  const inventory = new InventoryManager();
+  assert.ok(inventory.hotbar.length > 0);
+  assert.equal(inventory.selectedIndex, 0);
+
+  inventory.selectSlot(2);
+  assert.equal(inventory.selectedIndex, 2);
+
+  inventory.cycleSlot(1);
+  assert.equal(inventory.selectedIndex, 3);
+
+  const selected = inventory.getSelectedBlock();
+  assert.ok(selected !== BlockId.AIR);
+  assert.equal(inventory.consumeSelectedBlock(), true);
+
   assert.equal(getBlockDefinition(BlockId.AIR).solid, false);
   assert.equal(getBlockDefinition(BlockId.WATER).solid, false);
   assert.equal(getBlockDefinition(BlockId.GRASS).solid, true);
   assert.equal(getBlockDefinition(BlockId.STONE).solid, true);
   assert.equal(isBlockSolid(BlockId.STONE), true);
   assert.equal(isBlockSolid(BlockId.WATER), false);
-
-  const firstSlot = state.hotbar[0];
-  assert.ok(firstSlot !== undefined);
-  assert.ok(firstSlot.count > 0);
 });
 
 test('5. world persistence and integrity across save and load', () => {
@@ -134,20 +169,50 @@ test('5. world persistence and integrity across save and load', () => {
   });
 
   const gen = new WorldGenerator('persist-seed');
-  const world = storage.createWorld('Mundo Persistente', 'persist-seed', gen.findSafeSpawnPosition(0, 0));
-  world.modifiedChunks.push({
-    cx: 0,
-    cz: 0,
-    blocks: Array.from(gen.generateChunk(0, 0))
-  });
-  storage.saveWorld(world);
+  const spawn = gen.findSafeSpawn(0, 0);
+  const chunkBlocks = gen.generateChunkBlocks(0, 0);
+  const now = 1700000000000;
+
+  const worldData: SavedWorldData = {
+    meta: {
+      id: 'mundo-persistente-1',
+      name: 'Mundo Persistente',
+      seed: 'persist-seed',
+      createdAt: now,
+      lastPlayedAt: now
+    },
+    player: {
+      position: { x: spawn.x, y: spawn.y, z: spawn.z },
+      yaw: 0,
+      pitch: 0
+    },
+    inventory: {
+      selectedSlot: 0,
+      slots: [
+        { blockId: BlockId.GRASS, count: 16 },
+        { blockId: BlockId.STONE, count: 32 }
+      ]
+    },
+    settings: { ...DEFAULT_GAME_SETTINGS },
+    chunkEdits: {
+      '0,0': {
+        '2,4,2': BlockId.PLANKS
+      }
+    }
+  };
+
+  storage.saveWorld(worldData);
 
   const worlds = storage.listWorlds();
   assert.equal(worlds.length, 1);
-  const loaded = storage.loadWorld(world.meta.id);
+  assert.equal(worlds[0]?.id, 'mundo-persistente-1');
+
+  const loaded = storage.loadWorld('mundo-persistente-1');
   assert.ok(loaded !== null);
   assert.equal(loaded.meta.name, 'Mundo Persistente');
-  assert.equal(loaded.modifiedChunks.length, 1);
+  assert.equal(loaded.meta.seed, 'persist-seed');
+  assert.equal(loaded.chunkEdits['0,0']?.['2,4,2'], BlockId.PLANKS);
+  assert.ok(Array.from(chunkBlocks).length === CHUNK_SIZE_X * WORLD_HEIGHT * CHUNK_SIZE_Z);
 });
 
 test('6. atlas UV rectangles are valid and differentiate top vs side faces', () => {
